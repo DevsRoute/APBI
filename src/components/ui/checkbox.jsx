@@ -1,4 +1,4 @@
-export function Checkbox({ checked }) {
+export function Checkbox({ checked, uncheckedFill = '#D9D9D9' }) {
   return (
     <svg
       width="13"
@@ -22,7 +22,7 @@ export function Checkbox({ checked }) {
       <rect
         width="13"
         height="13"
-        fill={checked ? '#FAD47F' : '#D9D9D9'}
+        fill={checked ? '#FAD47F' : uncheckedFill}
       />
     </svg>
   )

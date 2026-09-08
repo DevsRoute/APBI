@@ -2,6 +2,7 @@ import { useState } from 'react'
 
 const TRACK_W = 213
 const BAR_GREEN = '#349A7A'
+const BAR_TEAL = '#36B9C1'
 
 const funnelRows = [
   { name: 'New',            count: 453, pct: 100.0, bar: 213 },
@@ -61,20 +62,22 @@ function FunnelArrow() {
   )
 }
 
-function Bar({ count, bar }) {
+function Bar({ count, pct, bar, percentage }) {
   const barW = Math.min(bar, TRACK_W)
+  const color = percentage ? BAR_TEAL : BAR_GREEN
+  const label = percentage ? `${pct.toFixed(1)}%` : count
   return (
     <div className="relative w-[213px]">
       <div className="relative h-[16px] w-full rounded-[10px] bg-ap-medium-gray">
         <div
           className="absolute left-0 top-1/2 h-[16px] -translate-y-1/2 rounded-[10px]"
-          style={{ width: barW, background: BAR_GREEN }}
+          style={{ width: barW, background: color }}
         />
         <span
           className="absolute top-1/2 -translate-y-1/2 pl-[6px] text-[14px] font-extrabold leading-none"
-          style={{ left: barW, color: BAR_GREEN }}
+          style={{ left: barW, color }}
         >
-          {count}
+          {label}
         </span>
       </div>
     </div>
@@ -95,14 +98,14 @@ function LeftRow({ row, highlighted }) {
   )
 }
 
-function RightRow({ row, highlighted }) {
+function RightRow({ row, highlighted, percentage }) {
   return (
     <div
       className={`flex h-[44px] w-[280px] cursor-pointer items-center pl-[23px] pr-[23px] transition-colors duration-150 ${
         highlighted ? 'bg-ap-row-highlight' : 'hover:bg-ap-row-highlight'
       }`}
     >
-      <Bar count={row.count} bar={row.bar} />
+      <Bar count={row.count} pct={row.pct} bar={row.bar} percentage={percentage} />
     </div>
   )
 }
@@ -119,9 +122,7 @@ function RightArrow() {
   return <div className="h-[6px] w-[280px] shrink-0" />
 }
 
-function RightCard({ rows, showHeader }) {
-  const [percentage, setPercentage] = useState(false)
-
+function RightCard({ rows, showHeader, percentage, onTogglePercentage }) {
   return (
     <div className="flex w-[280px] flex-col overflow-hidden bg-ap-header-gray">
       {showHeader && (
@@ -130,7 +131,7 @@ function RightCard({ rows, showHeader }) {
             type="button"
             role="checkbox"
             aria-checked={percentage}
-            onClick={() => setPercentage((v) => !v)}
+            onClick={onTogglePercentage}
             className="flex cursor-pointer items-center gap-[6px] text-[14px] font-medium text-ap-text focus:outline-none"
           >
             <PercentageCheckbox checked={percentage} />
@@ -141,7 +142,7 @@ function RightCard({ rows, showHeader }) {
       <div className="py-2">
         {rows.map((row, i) => (
           <div key={row.name}>
-            <RightRow row={row} highlighted={false} />
+            <RightRow row={row} highlighted={false} percentage={percentage} />
             {i < rows.length - 1 && <RightArrow />}
           </div>
         ))}
@@ -172,6 +173,9 @@ function LeftCard({ rows, showHeader }) {
 }
 
 export default function SuccessPanel() {
+  const [percentage, setPercentage] = useState(false)
+  const togglePercentage = () => setPercentage((v) => !v)
+
   return (
     <>
       <header>
@@ -195,13 +199,22 @@ export default function SuccessPanel() {
       {/* Main funnel block */}
       <div className="mt-[10px] flex gap-[11px]">
         <LeftCard rows={funnelRows} showHeader />
-        <RightCard rows={funnelRows} showHeader />
+        <RightCard
+          rows={funnelRows}
+          showHeader
+          percentage={percentage}
+          onTogglePercentage={togglePercentage}
+        />
       </div>
 
       {/* Summary block */}
       <div className="mt-[12px] flex gap-[11px]">
         <LeftCard rows={summaryRows} showHeader={false} />
-        <RightCard rows={summaryRows} showHeader={false} />
+        <RightCard
+          rows={summaryRows}
+          showHeader={false}
+          percentage={percentage}
+        />
       </div>
     </>
   )

@@ -99,7 +99,7 @@ function LeftRow({ row, highlighted }) {
 function RightRow({ row, highlighted }) {
   return (
     <div
-      className={`flex h-[44px] w-[259px] cursor-pointer items-center pl-[23px] pr-[23px] transition-colors duration-150 ${
+      className={`flex h-[44px] w-[280px] cursor-pointer items-center pl-[23px] pr-[23px] transition-colors duration-150 ${
         highlighted ? 'bg-ap-row-highlight' : 'hover:bg-ap-row-highlight'
       }`}
     >
@@ -112,7 +112,7 @@ export default function DurationPanel() {
   return (
     <>
       <header>
-        <h1 className="mt-[12px] py-[6px] text-[24px] font-extrabold leading-[24.661px] text-ap-text">
+        <h1 className="py-[6px] text-[24px] font-extrabold leading-[24.661px] text-ap-text">
           Duration
         </h1>
         <p className="mt-[4px] max-w-[578px] text-[14px] font-medium leading-tight text-ap-text">
@@ -133,7 +133,7 @@ export default function DurationPanel() {
       <div className="mt-[8px] flex gap-[11px]">
         {/* Left card: 311 wide */}
         <div className="flex w-[311px] flex-col overflow-hidden">
-          <div className="grid h-[65px] w-full shrink-0 grid-cols-[110px_105px_1fr] items-start bg-ap-dark-gray pl-[14px] pr-[12px] pt-[16px] text-[14px] leading-tight text-white">
+          <div className="grid h-[58px] w-full shrink-0 grid-cols-[110px_105px_1fr] items-start bg-ap-dark-gray pl-[14px] pr-[12px] pt-[12px] text-[14px] leading-tight text-white">
             <span />
             <span className="font-bold">
               Selected
@@ -146,7 +146,7 @@ export default function DurationPanel() {
               <span className="font-medium">Days</span>
             </span>
           </div>
-          <div className="bg-ap-header-gray py-2">
+          <div className="bg-ap-header-gray py-4">
             {durationRows.map((row) => (
               <LeftRow key={row.name} row={row} highlighted={false} />
             ))}
@@ -164,7 +164,7 @@ function RightCard() {
   const [normalize, setNormalize] = useState(false)
 
   return (
-    <div className="flex w-[259px] flex-col overflow-hidden bg-ap-header-gray">
+    <div className="flex w-[280px] flex-col overflow-hidden bg-ap-header-gray">
       <div className="flex h-[65px] w-full shrink-0 items-center bg-ap-header-gray pl-[23px]">
         <button
           type="button"

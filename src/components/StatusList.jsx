@@ -18,7 +18,7 @@ function Row({ label, count, pct, indented }) {
 
 export default function StatusList() {
   return (
-    <div className="w-[268px] bg-ap-header-gray py-[7px]">
+    <div className="w-[290px] bg-ap-header-gray py-[7px]">
       <ul>
         <Row
           label="Active Sites:"

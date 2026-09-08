@@ -43,33 +43,46 @@
   }
 }
 
-/* Custom scrollbar — Figma spec: 24px slot, 12px visible pill (#BBC3CF), 40px radius, 8px left gutter */
+/*
+ * Custom scrollbar — Figma #BBC3CF, 12px pill
+ * Small left inset only (no stacked padding gaps)
+ */
 .ap-scrollbar {
   scrollbar-width: auto;
   scrollbar-color: #bbc3cf transparent;
 }
 .ap-scrollbar::-webkit-scrollbar {
-  width: 24px;
+  width: 16px; /* 4px left gap + 12px thumb */
 }
 .ap-scrollbar::-webkit-scrollbar:horizontal {
   display: none;
 }
 .ap-scrollbar::-webkit-scrollbar-track {
   background: transparent;
-  margin-top: 28px;
 }
 .ap-scrollbar::-webkit-scrollbar-thumb {
   background-color: #bbc3cf;
   border-radius: 40px;
-  border-left: 8px solid transparent;
-  border-right: 4px solid transparent;
+  border-style: solid;
+  border-color: transparent;
+  border-width: 0 0 0 4px;
   background-clip: padding-box;
-  min-height: 40px;
+  min-height: 48px;
 }
 .ap-scrollbar::-webkit-scrollbar-thumb:hover {
   background-color: #a8b1bf;
   background-clip: padding-box;
 }
+.ap-scrollbar::-webkit-scrollbar-corner {
+  background: transparent;
+}
 .ap-scrollbar::-webkit-scrollbar-button {
   display: none;
+  width: 0;
+  height: 0;
+}
+
+.ap-scrollbar-overview::-webkit-scrollbar-track {
+  margin-top: 16px;
+  margin-bottom: 4px;
 }

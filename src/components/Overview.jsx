@@ -21,7 +21,7 @@ const TABS = [
 function OverviewPanel() {
   return (
     <>
-      <header className="w-full max-w-[640px]">
+      <header className="w-full">
         <h1 className="py-[6px] text-[24px] font-extrabold leading-[24.661px] text-ap-text">
           Overview
         </h1>
@@ -49,46 +49,28 @@ function OverviewPanel() {
 
 export default function Overview() {
   return (
-    <section className="relative flex h-full min-h-0 w-full max-w-[640px] flex-1 flex-col bg-white pl-[24px] pr-0 pt-[10px]">
+    <section className="relative flex h-full min-h-0 w-full max-w-[650px] flex-1 flex-col bg-white pl-[20px] pr-0 pt-[14px]">
       <Tabs
         defaultValue="overview"
         className="flex h-full min-h-0 flex-1 flex-col"
       >
-        {/* Decorative right-pointing chevron above the scrollbar */}
-        <div
-          aria-hidden
-          className="pointer-events-none absolute right-[2px] top-[4px] z-10"
-        >
-          <svg
-            width="6"
-            height="9"
-            viewBox="0 0 6 9"
-            fill="none"
-            xmlns="http://www.w3.org/2000/svg"
-            className="block"
-          >
-            <path d="M0 0L6 4.5L0 9Z" fill="#4E4D4D" />
-          </svg>
-        </div>
-
-        {/* Scrollable tab-content area — vertical only */}
-        <div className="ap-scrollbar relative flex min-h-0 w-full max-w-[640px] flex-1 flex-col overflow-y-auto overflow-x-hidden">
-          <TabsContent value="overview" className="mt-0">
+        {/* Shared 602px column so every tab keeps the same content→scrollbar gap */}
+        <div className="ap-scrollbar ap-scrollbar-overview relative flex min-h-0 w-full max-w-[640px] flex-1 flex-col overflow-y-auto overflow-x-hidden">
+          <TabsContent value="overview" className="">
             <OverviewPanel />
           </TabsContent>
-          <TabsContent value="duration" className="mt-0">
+          <TabsContent value="duration" className="">
             <DurationPanel />
           </TabsContent>
-          <TabsContent value="success" className="mt-0">
+          <TabsContent value="success" className="">
             <SuccessPanel />
           </TabsContent>
-          <TabsContent value="dead-deals" className="mt-0">
+          <TabsContent value="dead-deals" className="">
             <DeadDealPanel />
           </TabsContent>
         </div>
 
-        {/* Pinned tab bar */}
-        <TabsList className="mt-auto mb-[22px] shrink-0 pt-6">
+        <TabsList className="mt-auto mb-[22px] w-[602px] shrink-0 pt-6">
           {TABS.map((tab) => (
             <TabsTrigger key={tab.value} value={tab.value}>
               {tab.label}

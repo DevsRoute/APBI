@@ -80,7 +80,7 @@ function FilterColumn({ label, items, checked, onToggle, onSelectAll, onNone }) 
 function FilterCard({ title, height, showCollapse, onCollapse, children }) {
   return (
     <div className="flex flex-col bg-ap-light-gray" style={{ height }}>
-      <div className="relative flex h-[42px] shrink-0 items-center bg-ap-header-gray pl-[38px] pr-[12px]">
+      <div className="relative flex h-[42px] shrink-0 items-center bg-ap-header-gray pl-[28px] pr-[12px]">
         <h2 className="text-[20px] font-bold leading-[16px] text-ap-text">
           {title}
         </h2>
@@ -95,7 +95,7 @@ function FilterCard({ title, height, showCollapse, onCollapse, children }) {
           </button>
         )}
       </div>
-      <div className="min-h-0 flex-1 px-[38px] pb-4 pt-3">{children}</div>
+      <div className="min-h-0 flex-1 pl-[28px] pr-[28px] pb-4 pt-3">{children}</div>
     </div>
   )
 }
@@ -140,11 +140,12 @@ export default function FiltersSidebar() {
         }}
       />
       <aside
-        className={`relative z-50 h-full shrink-0 overflow-y-auto overflow-x-hidden bg-[#F6F6F6] transition-[width] duration-300 ease-in-out ${
+        className={`ap-scrollbar relative z-50 h-full shrink-0 overflow-y-auto overflow-x-hidden bg-[#F6F6F6] transition-[width] duration-300 ease-in-out ${
           isOpen ? 'w-[373px]' : 'w-[28px]'
         }`}
       >
-        <div className="relative w-[373px]">
+        {/* w-full when open so the Figma scrollbar slot isn't clipped; fixed width while collapsing */}
+        <div className={`relative ${isOpen ? 'w-full' : 'w-[373px]'}`}>
           <FilterCard
             title="Time Period"
             height={228}
@@ -170,7 +171,7 @@ export default function FiltersSidebar() {
             </div>
           </FilterCard>
 
-          <FilterCard title="Location" height={351}>
+          <FilterCard title="Location" height={325}>
             <div className="grid grid-cols-2 gap-x-[52px]">
               <FilterColumn
                 {...col('Region', location.Region)}
