@@ -5,6 +5,12 @@ import { sitesSelected } from '@/data/stats'
 // Track width in px (Figma: 213). Bar percent widths are proportional to this.
 const TRACK_W = 213
 
+// RightRow is w-[280px] with 23px left padding before the 213px track.
+// RightCard's overflow-hidden clips at the card's own right edge — the
+// row's pr-23 is just padding, not a clip boundary — so only the left
+// padding counts against the room available for a label past the bar.
+const OUTER_SLACK = 280 - 23 - TRACK_W
+
 const durationRows = [
   { name: 'New',            selected: 18, pct: 23.8, overall: 45, tone: 'green' },
   { name: 'Promising',      selected: 27, pct: 35.8, overall: 65, tone: 'green' },
@@ -47,9 +53,15 @@ function NormalizeCheckbox({ checked }) {
 }
 
 function BarRow({ selected, overall, tone }) {
-  const barW = Math.min(selected * SCALE, TRACK_W)
   const overallX = Math.min(overall * SCALE, TRACK_W)
   const color = barColor[tone]
+  const label = String(selected)
+
+  // Rough label width at 14px font-extrabold — cap the bar a touch short of
+  // the track's end so the label always fits outside it, in the bar's own
+  // color, without running into RightCard's overflow-hidden edge.
+  const estLabelW = label.length * 8.5 + 6
+  const barW = Math.min(selected * SCALE, TRACK_W, TRACK_W + OUTER_SLACK - estLabelW)
 
   return (
     <div className="relative w-[213px]">
@@ -72,7 +84,7 @@ function BarRow({ selected, overall, tone }) {
           className="absolute top-1/2 -translate-y-1/2 pl-[6px] text-[14px] font-extrabold leading-none"
           style={{ left: barW, color }}
         >
-          {selected}
+          {label}
         </span>
       </div>
     </div>

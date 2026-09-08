@@ -4,6 +4,13 @@ const TRACK_W = 213
 const BAR_GREEN = '#349A7A'
 const BAR_TEAL = '#36B9C1'
 
+// RightRow has 23px padding on each side around the 213px track. Per Figma,
+// RightCard is 280px wide in count mode but widens to 314px in percentage
+// mode, so a "%" label always has room to sit outside the bar.
+const RIGHT_ROW_PAD_X = 23
+const RIGHT_CARD_W = { count: 280, percentage: 314 }
+const RIGHT_CARD_WIDTH_CLASS = { count: 'w-[280px]', percentage: 'w-[314px]' }
+
 const funnelRows = [
   { name: 'New',            count: 453, pct: 100.0, bar: 213 },
   { name: 'Promising',      count: 135, pct: 29.8,  bar: 89 },
@@ -63,9 +70,22 @@ function FunnelArrow() {
 }
 
 function Bar({ count, pct, bar, percentage }) {
-  const barW = Math.min(bar, TRACK_W)
   const color = percentage ? BAR_TEAL : BAR_GREEN
-  const label = percentage ? `${pct.toFixed(1)}%` : count
+  const label = percentage ? `${pct.toFixed(1)}%` : String(count)
+
+  // RightCard's overflow-hidden clips at the card's own right edge — the
+  // row's pr-23 is just padding, not a clip boundary — so only the left
+  // padding actually eats into the room available for the label.
+  const cardW = percentage ? RIGHT_CARD_W.percentage : RIGHT_CARD_W.count
+  const outerSlack = cardW - RIGHT_ROW_PAD_X - TRACK_W
+
+  // Rough label width at 14px font-extrabold — only used as a safety net so
+  // an unusually long label can never clip the card; with Figma's card
+  // widths this doesn't kick in, and the bar renders at its true full
+  // width (no gray sliver past a "100%" fill).
+  const estLabelW = label.length * 8.5 + 6
+  const barW = Math.min(bar, TRACK_W, TRACK_W + outerSlack - estLabelW)
+
   return (
     <div className="relative w-[213px]">
       <div className="relative h-[16px] w-full rounded-[10px] bg-ap-medium-gray">
@@ -101,7 +121,7 @@ function LeftRow({ row, highlighted }) {
 function RightRow({ row, highlighted, percentage }) {
   return (
     <div
-      className={`flex h-[44px] w-[280px] cursor-pointer items-center pl-[23px] pr-[23px] transition-colors duration-150 ${
+      className={`flex h-[44px] w-full cursor-pointer items-center pl-[23px] pr-[23px] transition-colors duration-150 ${
         highlighted ? 'bg-ap-row-highlight' : 'hover:bg-ap-row-highlight'
       }`}
     >
@@ -119,12 +139,17 @@ function LeftArrow() {
 }
 
 function RightArrow() {
-  return <div className="h-[6px] w-[280px] shrink-0" />
+  return <div className="h-[6px] w-full shrink-0" />
 }
 
 function RightCard({ rows, showHeader, percentage, onTogglePercentage }) {
+  const widthClass = percentage
+    ? RIGHT_CARD_WIDTH_CLASS.percentage
+    : RIGHT_CARD_WIDTH_CLASS.count
   return (
-    <div className="flex w-[280px] flex-col overflow-hidden bg-ap-header-gray">
+    <div
+      className={`flex shrink-0 flex-col overflow-hidden bg-ap-header-gray transition-[width] duration-150 ${widthClass}`}
+    >
       {showHeader && (
         <div className="flex h-[41px] w-full shrink-0 items-center bg-ap-header-gray pl-[23px] pt-[10px]">
           <button
