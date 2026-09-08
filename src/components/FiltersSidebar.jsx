@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import * as TabsPrimitive from '@radix-ui/react-tabs'
 
 import { Checkbox } from '@/components/ui/checkbox'
 import { defaultChecked, location, people, timePeriod } from '@/data/filters'
@@ -46,7 +47,27 @@ function SelectAllNone({ onSelectAll, onNone }) {
   )
 }
 
-function FilterColumn({ label, items, checked, onToggle, onSelectAll, onNone }) {
+// 'time' shows 5 rows before scrolling (Time Period columns); 'panel' shows
+// 10 (Territory/People columns). The scrollbar gutter is only reserved once
+// a column's items actually exceed that cap, so short lists (e.g. Broker)
+// keep their full width instead of losing space to an unused scrollbar.
+const ROWS_VISIBLE = { time: 5, panel: 10 }
+const COLUMN_MAX_HEIGHT = {
+  time: 'max-h-[120px]',
+  panel: 'max-h-[240px]',
+}
+
+function FilterColumn({
+  label,
+  items,
+  checked,
+  onToggle,
+  onSelectAll,
+  onNone,
+  size = 'time',
+}) {
+  const needsScroll = items.length > ROWS_VISIBLE[size]
+
   return (
     <div className="min-w-0">
       <div className="whitespace-nowrap text-[14px] font-bold leading-[16px] text-ap-text">
@@ -55,7 +76,13 @@ function FilterColumn({ label, items, checked, onToggle, onSelectAll, onNone }) 
       <div className="mt-[3px]">
         <SelectAllNone onSelectAll={onSelectAll} onNone={onNone} />
       </div>
-      <ul className="mt-[4px] flex flex-col">
+      <ul
+        className={`mt-[4px] flex flex-col ${
+          needsScroll
+            ? `ap-scrollbar-thin overflow-y-auto overflow-x-hidden pr-[6px] ${COLUMN_MAX_HEIGHT[size]}`
+            : ''
+        }`}
+      >
         {items.map((item) => (
           <li key={item}>
             <button
@@ -63,10 +90,10 @@ function FilterColumn({ label, items, checked, onToggle, onSelectAll, onNone }) 
               role="checkbox"
               aria-checked={!!checked[item]}
               onClick={() => onToggle(item)}
-              className="flex h-[24px] w-full items-center gap-[5px] text-left focus:outline-none"
+              className="flex h-[24px] w-full items-center gap-[5px] overflow-hidden text-left focus:outline-none"
             >
               <Checkbox checked={!!checked[item]} />
-              <span className="text-[14px] font-medium leading-none text-ap-text">
+              <span className="truncate whitespace-nowrap text-[14px] font-medium leading-none text-ap-text">
                 {item}
               </span>
             </button>
@@ -97,6 +124,38 @@ function FilterCard({ title, height, showCollapse, onCollapse, children }) {
       </div>
       <div className="min-h-0 flex-1 pl-[28px] pr-[28px] pb-4 pt-3">{children}</div>
     </div>
+  )
+}
+
+// Card whose header is a two-way tab switcher (e.g. Territory / People)
+// instead of a single static title.
+function SidebarTabCard({ tabs }) {
+  return (
+    <TabsPrimitive.Root
+      defaultValue={tabs[0].value}
+      className="flex flex-col bg-ap-light-gray"
+    >
+      <TabsPrimitive.List className="grid w-full grid-cols-2">
+        {tabs.map((tab) => (
+          <TabsPrimitive.Trigger
+            key={tab.value}
+            value={tab.value}
+            className="flex h-[42px] items-center justify-center bg-ap-header-gray text-[20px] font-bold leading-[16px] text-ap-text transition-colors duration-150 hover:bg-ap-medium-gray focus:outline-none data-[state=active]:bg-ap-row-highlight data-[state=active]:text-[#4E4D4D] data-[state=active]:hover:bg-ap-row-highlight"
+          >
+            {tab.label}
+          </TabsPrimitive.Trigger>
+        ))}
+      </TabsPrimitive.List>
+      {tabs.map((tab) => (
+        <TabsPrimitive.Content
+          key={tab.value}
+          value={tab.value}
+          className="pl-[28px] pr-[28px] pb-4 pt-3 focus:outline-none"
+        >
+          {tab.content}
+        </TabsPrimitive.Content>
+      ))}
+    </TabsPrimitive.Root>
   )
 }
 
@@ -140,72 +199,102 @@ export default function FiltersSidebar() {
         }}
       />
       <aside
-        className={`ap-scrollbar relative z-50 h-full shrink-0 overflow-y-auto overflow-x-hidden bg-[#F6F6F6] transition-[width] duration-300 ease-in-out ${
+        className={`relative z-50 flex h-full shrink-0 flex-col bg-[#F6F6F6] transition-[width] duration-300 ease-in-out ${
           isOpen ? 'w-[373px]' : 'w-[28px]'
         }`}
       >
-        {/* w-full when open so the Figma scrollbar slot isn't clipped; fixed width while collapsing */}
-        <div className={`relative ${isOpen ? 'w-full' : 'w-[373px]'}`}>
-          <FilterCard
-            title="Time Period"
-            height={228}
-            showCollapse
-            onCollapse={() => setIsOpen(false)}
-          >
-            <div className="relative z-50 grid grid-cols-3 gap-x-[42px]">
-              <FilterColumn
-                {...col('Year', timePeriod.Year)}
-                checked={checked}
-                onToggle={toggle}
-              />
-              <FilterColumn
-                {...col('Quarter', timePeriod.Quarter)}
-                checked={checked}
-                onToggle={toggle}
-              />
-              <FilterColumn
-                {...col('Month', timePeriod.Month)}
-                checked={checked}
-                onToggle={toggle}
-              />
-            </div>
-          </FilterCard>
+        {/* Scrollable filter cards — the Apply button below stays put regardless of scroll */}
+        <div className="ap-scrollbar min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
+          {/* w-full when open so the Figma scrollbar slot isn't clipped; fixed width while collapsing */}
+          <div className={`relative ${isOpen ? 'w-full' : 'w-[373px]'}`}>
+            <FilterCard
+              title="Time Period"
+              height={240}
+              showCollapse
+              onCollapse={() => setIsOpen(false)}
+            >
+              <div className="relative z-50 grid grid-cols-3 gap-x-[42px]">
+                <FilterColumn
+                  {...col('Year', timePeriod.Year)}
+                  checked={checked}
+                  onToggle={toggle}
+                />
+                <FilterColumn
+                  {...col('Quarter', timePeriod.Quarter)}
+                  checked={checked}
+                  onToggle={toggle}
+                />
+                <FilterColumn
+                  {...col('Month', timePeriod.Month)}
+                  checked={checked}
+                  onToggle={toggle}
+                />
+              </div>
+            </FilterCard>
 
-          <FilterCard title="Location" height={325}>
-            <div className="grid grid-cols-2 gap-x-[52px]">
-              <FilterColumn
-                {...col('Region', location.Region)}
-                checked={checked}
-                onToggle={toggle}
-              />
-              <FilterColumn
-                {...col('State', location.State)}
-                checked={checked}
-                onToggle={toggle}
-              />
-            </div>
-          </FilterCard>
-
-          <FilterCard title="People" height={338}>
-            <div className="grid grid-cols-3 gap-x-[42px]">
-              <FilterColumn
-                {...col('Director', people.Director)}
-                checked={checked}
-                onToggle={toggle}
-              />
-              <FilterColumn
-                {...col('RE Manager', people['RE Manager'])}
-                checked={checked}
-                onToggle={toggle}
-              />
-              <FilterColumn
-                {...col('Broker', people.Broker)}
-                checked={checked}
-                onToggle={toggle}
-              />
-            </div>
-          </FilterCard>
+            <SidebarTabCard
+              tabs={[
+                {
+                  value: 'territory',
+                  label: 'Territory',
+                  content: (
+                    <div className="grid grid-cols-2 gap-x-[52px]">
+                      <FilterColumn
+                        {...col('Region', location.Region)}
+                        checked={checked}
+                        onToggle={toggle}
+                        size="panel"
+                      />
+                      <FilterColumn
+                        {...col('State', location.State)}
+                        checked={checked}
+                        onToggle={toggle}
+                        size="panel"
+                      />
+                    </div>
+                  ),
+                },
+                {
+                  value: 'people',
+                  label: 'People',
+                  content: (
+                    <div className="grid grid-cols-3 gap-x-[42px]">
+                      <FilterColumn
+                        {...col('Director', people.Director)}
+                        checked={checked}
+                        onToggle={toggle}
+                        size="panel"
+                      />
+                      <FilterColumn
+                        {...col('RE Manager', people['RE Manager'])}
+                        checked={checked}
+                        onToggle={toggle}
+                        size="panel"
+                      />
+                      <FilterColumn
+                        {...col('Broker', people.Broker)}
+                        checked={checked}
+                        onToggle={toggle}
+                        size="panel"
+                      />
+                    </div>
+                  ),
+                },
+              ]}
+            />
+          </div>
         </div>
+
+        {isOpen && (
+          <div className="flex shrink-0 justify-end bg-[#F6F6F6] px-[16px] pt-[12px] pb-6">
+            <button
+              type="button"
+              className="flex h-[35px] w-[78px] shrink-0 items-center justify-center rounded-[18px] border border-[#EFBC50] bg-[#F4C76B] font-poppins text-[14px] font-semibold leading-none tracking-normal text-[#404040] transition-colors hover:bg-[#F0BD58] focus:outline-none"
+            >
+              Apply
+            </button>
+          </div>
+        )}
       </aside>
 
       {/* Collapsed mini-sidebar — visible only when the main sidebar is closed */}
