@@ -31,6 +31,12 @@ const barColor = {
 // Scale so the largest selected value (89) fills roughly 75% of the track.
 const SCALE = TRACK_W / 120
 
+// Normalized mode: each row uses its own scale so that the row's Overall
+// (average) always lands at the same fixed position — the track's center.
+// Bars still grow from the left; comparing where each bar ends against the
+// centered tick shows how selected compares to that row's average.
+const NORM_OVERALL_X = TRACK_W / 2
+
 // Custom checkbox for Normalize — AP medium gray (#B8B8B8) unchecked fill.
 function NormalizeCheckbox({ checked }) {
   return (
@@ -52,16 +58,24 @@ function NormalizeCheckbox({ checked }) {
   )
 }
 
-function BarRow({ selected, overall, tone }) {
-  const overallX = Math.min(overall * SCALE, TRACK_W)
+function BarRow({ selected, overall, tone, normalize }) {
   const color = barColor[tone]
   const label = String(selected)
+
+  // Per-row scale in normalize mode pins `overall` to the fixed center X;
+  // shared scale otherwise. Bars grow from the left in both modes.
+  const scale = normalize
+    ? overall > 0
+      ? NORM_OVERALL_X / overall
+      : 0
+    : SCALE
+  const overallX = normalize ? NORM_OVERALL_X : Math.min(overall * SCALE, TRACK_W)
 
   // Rough label width at 14px font-extrabold — cap the bar a touch short of
   // the track's end so the label always fits outside it, in the bar's own
   // color, without running into RightCard's overflow-hidden edge.
   const estLabelW = label.length * 8.5 + 6
-  const barW = Math.min(selected * SCALE, TRACK_W, TRACK_W + OUTER_SLACK - estLabelW)
+  const barW = Math.min(selected * scale, TRACK_W, TRACK_W + OUTER_SLACK - estLabelW)
 
   return (
     <div className="relative w-[213px]">
@@ -108,14 +122,19 @@ function LeftRow({ row, highlighted }) {
   )
 }
 
-function RightRow({ row, highlighted }) {
+function RightRow({ row, highlighted, normalize }) {
   return (
     <div
       className={`flex h-[44px] w-[280px] cursor-pointer items-center pl-[23px] pr-[23px] transition-colors duration-150 ${
         highlighted ? 'bg-ap-row-highlight' : 'hover:bg-ap-row-highlight'
       }`}
     >
-      <BarRow selected={row.selected} overall={row.overall} tone={row.tone} />
+      <BarRow
+        selected={row.selected}
+        overall={row.overall}
+        tone={row.tone}
+        normalize={normalize}
+      />
     </div>
   )
 }
@@ -191,7 +210,12 @@ function RightCard() {
       </div>
       <div className="py-2">
         {durationRows.map((row) => (
-          <RightRow key={row.name} row={row} highlighted={false} />
+          <RightRow
+            key={row.name}
+            row={row}
+            highlighted={false}
+            normalize={normalize}
+          />
         ))}
       </div>
     </div>

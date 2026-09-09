@@ -117,9 +117,16 @@ function DonutLabel({ style, name, count, pct, align = 'left' }) {
   )
 }
 
-function labelFitsInSegment(label, widthPx) {
-  // ~6.5px per character at 11px extrabold, plus a little padding
-  return widthPx >= label.length * 6.5 + 4
+// Above-bar layout constants.
+// D: minimum horizontal gap between two above-bar numbers (client rule).
+// CHAR_W: rough px-per-char at 11px extrabold — used to estimate label width.
+// INSIDE_PAD: breathing room required for a label to sit inside a segment.
+const ABOVE_LABEL_D = 10
+const LABEL_CHAR_W = 6.5
+const LABEL_INSIDE_PAD = 6
+
+function measureLabelWidth(label) {
+  return label.length * LABEL_CHAR_W + 2
 }
 
 function StackedBar({ cells, normalize, percentage }) {
@@ -139,9 +146,10 @@ function StackedBar({ cells, normalize, percentage }) {
     })
     .filter((s) => s.n > 0)
 
-  // Pixel widths (absolute scale or normalize share of track)
+  // Pixel widths (absolute scale or normalize share of track). Last segment
+  // in non-normalize mode absorbs any rounding slack so segments sum to trackW.
   let used = 0
-  const segments = raw.map((s, idx) => {
+  const raw2 = raw.map((s, idx) => {
     let widthPx
     if (normalize) {
       widthPx = (s.pct / 100) * trackW
@@ -151,21 +159,41 @@ function StackedBar({ cells, normalize, percentage }) {
       widthPx = Math.round(s.n * pxPerUnit)
       used += widthPx
     }
-    return {
-      ...s,
-      widthPx,
-      external: !labelFitsInSegment(s.label, widthPx),
-    }
+    return { ...s, widthPx }
   })
-
-  const hasExternal = segments.some((s) => s.external)
 
   let cumPx = 0
-  const positioned = segments.map((s) => {
+  const withPositions = raw2.map((s) => {
     const startPx = cumPx
     cumPx += s.widthPx
-    return { ...s, startPx }
+    return { ...s, startPx, centerPx: startPx + s.widthPx / 2 }
   })
+
+  // Cascading inside/above decision per client rules:
+  //  - Try to place each label INSIDE its segment (bold, white).
+  //  - If it doesn't fit, or if the PREVIOUS above-label crosses the current
+  //    segment's center line (extends past centerPx before observing D),
+  //    force ABOVE and colour-match to the segment.
+  //  - Above-labels must be ≥ D apart, so a label may be shifted right of its
+  //    ideal centered position to preserve that gap.
+  let prevAboveRight = -Infinity
+  const positioned = withPositions.map((s) => {
+    const labelW = measureLabelWidth(s.label)
+    const fitsInside = s.widthPx >= labelW + LABEL_INSIDE_PAD
+    const prevCrossesCenter = prevAboveRight + ABOVE_LABEL_D > s.centerPx
+    const external = !fitsInside || prevCrossesCenter
+
+    let aboveLeft = null
+    if (external) {
+      const centeredLeft = s.centerPx - labelW / 2
+      aboveLeft = Math.max(centeredLeft, prevAboveRight + ABOVE_LABEL_D, 0)
+      prevAboveRight = aboveLeft + labelW
+    }
+
+    return { ...s, labelW, external, aboveLeft }
+  })
+
+  const hasExternal = positioned.some((s) => s.external)
 
   return (
     <div
@@ -177,11 +205,12 @@ function StackedBar({ cells, normalize, percentage }) {
         .map((s) => (
           <span
             key={`ext-${s.i}`}
-            className="pointer-events-none absolute top-0 -translate-x-1/2 text-[11px] font-extrabold leading-none text-ap-text"
+            className="pointer-events-none absolute top-0 whitespace-nowrap text-[11px] font-extrabold leading-none"
             style={{
               left: normalize
-                ? `${((s.startPx + s.widthPx / 2) / trackW) * 100}%`
-                : s.startPx + s.widthPx / 2,
+                ? `${(s.aboveLeft / trackW) * 100}%`
+                : s.aboveLeft,
+              color: REASON_COLORS[s.i],
             }}
           >
             {s.label}
@@ -350,34 +379,16 @@ export default function DeadDealPanel() {
 
       {/* Block 3: Stacked bars with Normalize + Percentage toggles */}
       <div className="flex max-w-[602px] w-full flex-col overflow-hidden bg-[#DCDCDC]">
-        <div className="grid h-[40px] w-full shrink-0 grid-cols-[130px_repeat(4,minmax(0,1fr))] items-center bg-[#B8B8B8] pl-[14px] text-[14px] font-semibold leading-none text-[#4E4D4D]">
-          <button
-            type="button"
-            role="checkbox"
-            aria-checked={normalize}
-            onClick={() => setNormalize((v) => !v)}
-            className="flex items-center gap-[5px] text-left text-[#4E4D4D] focus:outline-none"
-          >
-            <Checkbox checked={normalize} uncheckedFill="#777777" />
-            <span>Normalize</span>
-          </button>
-          <span>Economics</span>
-          <span>Competition</span>
-          <span>Operations</span>
-          <span>Other</span>
+        <div className="flex h-[40px] w-full shrink-0 items-center bg-[#B8B8B8] pl-[14px] pr-[30px] text-[14px] font-semibold leading-none text-[#4E4D4D]">
+          <span className="w-[120px] shrink-0" aria-hidden />
+          <div className="grid min-w-0 flex-1 grid-cols-4">
+            <span>Economics</span>
+            <span>Competition</span>
+            <span>Operations</span>
+            <span>Other</span>
+          </div>
         </div>
-        <div className="flex h-[30px] w-full items-center pl-[14px] pt-[8px] text-[14px] font-medium text-ap-text">
-          <button
-            type="button"
-            role="checkbox"
-            aria-checked={percentage}
-            onClick={() => setPercentage((v) => !v)}
-            className="flex items-center gap-[5px] text-left focus:outline-none"
-          >
-            <Checkbox checked={percentage} uncheckedFill="#777777" />
-            <span>Percentage</span>
-          </button>
-        </div>
+       
         <div className="pb-[5px]">
           {barRows.map((row) => (
             <div
@@ -400,6 +411,28 @@ export default function DeadDealPanel() {
               </div>
             </div>
           ))}
+        </div>
+        <div className="flex items-center gap-[17px] h-[30px] w-full pl-[140px] pt-[8px] mb-[13px] text-[14px] font-medium text-ap-text">
+          <button
+            type="button"
+            role="checkbox"
+            aria-checked={percentage}
+            onClick={() => setPercentage((v) => !v)}
+            className="flex items-center gap-[5px] text-left focus:outline-none"
+          >
+            <Checkbox checked={percentage} uncheckedFill="#777777" />
+            <span>Percentage</span>
+          </button>
+          <button
+            type="button"
+            role="checkbox"
+            aria-checked={normalize}
+            onClick={() => setNormalize((v) => !v)}
+            className="flex items-center gap-[5px] text-left text-[#4E4D4D] focus:outline-none"
+          >
+            <Checkbox checked={normalize} uncheckedFill="#777777" />
+            <span>Normalize</span>
+          </button>
         </div>
       </div>
     </div>

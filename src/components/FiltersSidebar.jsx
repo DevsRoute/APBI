@@ -129,10 +129,10 @@ function FilterCard({ title, height, showCollapse, onCollapse, children }) {
 
 // Card whose header is a two-way tab switcher (e.g. Territory / People)
 // instead of a single static title.
-function SidebarTabCard({ tabs }) {
+function SidebarTabCard({ tabs, defaultValue = 'territory' }) {
   return (
     <TabsPrimitive.Root
-      defaultValue={tabs[0].value}
+      defaultValue={defaultValue}
       className="flex flex-col bg-ap-light-gray"
     >
       <TabsPrimitive.List className="grid w-full grid-cols-2">
