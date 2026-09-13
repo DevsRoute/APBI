@@ -1,5 +1,6 @@
 import { useState } from 'react'
 
+import { hasImageForStatus, useRightPanel } from '@/context/RightPanelContext'
 import { sitesSelected } from '@/data/stats'
 
 // Track width in px (Figma: 213). Bar percent widths are proportional to this.
@@ -105,12 +106,14 @@ function BarRow({ selected, overall, tone, normalize }) {
   )
 }
 
-function LeftRow({ row, highlighted }) {
+function LeftRow({ row, highlighted, onClick }) {
+  const clickable = Boolean(onClick)
   return (
     <div
-      className={`grid h-[44px] w-[311px] cursor-pointer grid-cols-[110px_105px_1fr] items-center bg-ap-header-gray pl-[14px] pr-[16px] text-[14px] leading-none text-ap-text transition-colors duration-150 ${
-        highlighted ? 'bg-ap-row-highlight' : 'hover:bg-ap-row-highlight'
-      }`}
+      onClick={onClick}
+      className={`grid h-[44px] w-[311px] grid-cols-[110px_105px_1fr] items-center bg-ap-header-gray pl-[14px] pr-[16px] text-[14px] leading-none text-ap-text transition-colors duration-150 ${
+        clickable ? 'cursor-pointer' : 'cursor-default'
+      } ${highlighted ? 'bg-ap-row-highlight' : clickable ? 'hover:bg-ap-row-highlight' : ''}`}
     >
       <span className="font-semibold">{row.name}</span>
       <span>
@@ -140,6 +143,8 @@ function RightRow({ row, highlighted, normalize }) {
 }
 
 export default function DurationPanel() {
+  const { selectedStatus, setSelectedStatus } = useRightPanel()
+
   return (
     <>
       <header>
@@ -178,9 +183,19 @@ export default function DurationPanel() {
             </span>
           </div>
           <div className="bg-ap-header-gray py-4">
-            {durationRows.map((row) => (
-              <LeftRow key={row.name} row={row} highlighted={false} />
-            ))}
+            {durationRows.map((row) => {
+              const clickable = hasImageForStatus(row.name)
+              return (
+                <LeftRow
+                  key={row.name}
+                  row={row}
+                  highlighted={clickable && selectedStatus === row.name}
+                  onClick={
+                    clickable ? () => setSelectedStatus(row.name) : undefined
+                  }
+                />
+              )
+            })}
           </div>
         </div>
 

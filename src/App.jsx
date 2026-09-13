@@ -1,7 +1,10 @@
 import FiltersSidebar from '@/components/FiltersSidebar'
 import Overview from '@/components/Overview'
+import { useRightPanel } from '@/context/RightPanelContext'
 
 export default function App() {
+  const { imageSrc } = useRightPanel()
+
   return (
     <div className="flex h-screen w-full flex-col overflow-hidden bg-white">
       <div className="relative z-[60] w-full shrink-0">
@@ -28,11 +31,11 @@ export default function App() {
           <Overview />
         </main>
 
-        <aside className="max-w-[799px] w-full shrink-0 overflow-hidden bg-white">
+        <aside className="min-w-0 max-w-[799px] w-full shrink overflow-y-auto bg-white">
           <img
-            src="/right-panel.png"
+            src={imageSrc}
             alt="Sites table and pinned notes"
-            className="block h-full w-full select-none object-cover object-center"
+            className="block h-auto w-full max-w-full select-none"
           />
         </aside>
       </div>

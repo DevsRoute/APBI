@@ -9,6 +9,7 @@ import {
   TabsList,
   TabsTrigger,
 } from '@/components/ui/tabs'
+import { useRightPanel } from '@/context/RightPanelContext'
 import { sitesSelected } from '@/data/stats'
 
 const TABS = [
@@ -48,10 +49,13 @@ function OverviewPanel() {
 }
 
 export default function Overview() {
+  const { activeTab, setActiveTab } = useRightPanel()
+
   return (
     <section className="relative flex h-full min-h-0 w-full max-w-[650px] flex-1 flex-col bg-white pl-[20px] pr-0 pt-[14px]">
       <Tabs
-        defaultValue="overview"
+        value={activeTab}
+        onValueChange={setActiveTab}
         className="flex h-full min-h-0 flex-1 flex-col"
       >
         {/* Shared 602px column so every tab keeps the same content→scrollbar gap */}

@@ -1,5 +1,7 @@
 import { useState } from 'react'
 
+import { hasImageForStatus, useRightPanel } from '@/context/RightPanelContext'
+
 const TRACK_W = 213
 const BAR_GREEN = '#349A7A'
 const BAR_TEAL = '#36B9C1'
@@ -104,12 +106,14 @@ function Bar({ count, pct, bar, percentage }) {
   )
 }
 
-function LeftRow({ row, highlighted }) {
+function LeftRow({ row, highlighted, onClick }) {
+  const clickable = Boolean(onClick)
   return (
     <div
-      className={`grid h-[44px] w-[311px] cursor-pointer grid-cols-[140px_50px_1fr] items-center pl-[14px] pr-[20px] text-[14px] leading-none text-ap-text transition-colors duration-150 ${
-        highlighted ? 'bg-ap-row-highlight' : 'hover:bg-ap-row-highlight'
-      }`}
+      onClick={onClick}
+      className={`grid h-[44px] w-[311px] grid-cols-[140px_50px_1fr] items-center pl-[14px] pr-[20px] text-[14px] leading-none text-ap-text transition-colors duration-150 ${
+        clickable ? 'cursor-pointer' : 'cursor-default'
+      } ${highlighted ? 'bg-ap-row-highlight' : clickable ? 'hover:bg-ap-row-highlight' : ''}`}
     >
       <span className="font-semibold">{row.name}</span>
       <span className="text-right font-extrabold">{row.count}</span>
@@ -177,6 +181,7 @@ function RightCard({ rows, showHeader, percentage, onTogglePercentage }) {
 }
 
 function LeftCard({ rows, showHeader }) {
+  const { selectedStatus, setSelectedStatus } = useRightPanel()
   return (
     <div className="flex w-[311px] flex-col overflow-hidden bg-ap-header-gray">
       {showHeader && (
@@ -186,12 +191,21 @@ function LeftCard({ rows, showHeader }) {
         </div>
       )}
       <div className="py-2">
-        {rows.map((row, i) => (
-          <div key={row.name}>
-            <LeftRow row={row} highlighted={false} />
-            {i < rows.length - 1 && <LeftArrow />}
-          </div>
-        ))}
+        {rows.map((row, i) => {
+          const clickable = hasImageForStatus(row.name)
+          return (
+            <div key={row.name}>
+              <LeftRow
+                row={row}
+                highlighted={clickable && selectedStatus === row.name}
+                onClick={
+                  clickable ? () => setSelectedStatus(row.name) : undefined
+                }
+              />
+              {i < rows.length - 1 && <LeftArrow />}
+            </div>
+          )
+        })}
       </div>
     </div>
   )
