@@ -13,7 +13,6 @@ const SELECTED_COLOR = '#2563EB'
 const ORIGINAL_ROUTE_COLOR = '#9CA3AF'
 const CUSTOM_ROUTE_COLOR = '#2563EB'
 const NODE_COLOR = '#2563EB'
-const NODE_HOVER_COLOR = '#DC2626'
 
 // Right-click-to-add-node distance threshold, in screen pixels. If the user
 // right-clicks farther than this from the current route we ignore it, since
@@ -32,10 +31,11 @@ function pinSvg(color, scale = 1) {
 }
 
 function nodeSvg(color = NODE_COLOR) {
+  // Solid white fill (r=10) is large enough to cover the small drag-handle
+  // dot that DirectionsRenderer draws at each waypoint when draggable=true.
   const svg = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
-      <circle cx="9" cy="9" r="7" fill="#ffffff" stroke="${color}" stroke-width="2.5"/>
-      <circle cx="9" cy="9" r="3" fill="${color}"/>
+    <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22">
+      <circle cx="11" cy="11" r="9" fill="#ffffff" stroke="${color}" stroke-width="2.5"/>
     </svg>`
   return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`
 }
@@ -159,6 +159,12 @@ export default function MapView() {
           if (!isNearCurrentRoute(e.latLng)) return
           addNodeAt(e.latLng)
         })
+
+        // Kill the browser's native context menu inside the map so our own
+        // right-click menu is the only thing that shows.
+        mapContainerRef.current?.addEventListener('contextmenu', (e) =>
+          e.preventDefault(),
+        )
 
         MAP_SITES.forEach((site) => {
           const marker = new google.maps.Marker({
@@ -286,20 +292,17 @@ export default function MapView() {
         map: mapRef.current,
         draggable: true,
         crossOnDrag: false,
+        // optimized: false forces per-marker DOM so zIndex is honoured over
+        // the DirectionsRenderer's built-in draggable waypoint handles.
+        optimized: false,
         icon: makeNodeIcon(NODE_COLOR),
-        title: 'Control node — drag to move, click to remove',
-        zIndex: 1000 + index,
+        title: 'Drag to move · Right-click to delete',
+        zIndex: 999999 + index,
       })
-      marker.addListener('mouseover', () => {
-        marker.setIcon(makeNodeIcon(NODE_HOVER_COLOR))
-      })
-      marker.addListener('mouseout', () => {
-        marker.setIcon(makeNodeIcon(NODE_COLOR))
-      })
-      marker.addListener('click', () => deleteNode(index))
       marker.addListener('dragend', (e) => {
         if (e.latLng) moveNode(index, e.latLng)
       })
+      marker.addListener('rightclick', () => deleteNode(index))
       waypointMarkersRef.current.push(marker)
     })
   }
@@ -308,8 +311,8 @@ export default function MapView() {
     const google = window.google
     return {
       url: nodeSvg(color),
-      scaledSize: new google.maps.Size(18, 18),
-      anchor: new google.maps.Point(9, 9),
+      scaledSize: new google.maps.Size(22, 22),
+      anchor: new google.maps.Point(11, 11),
     }
   }
 
@@ -470,7 +473,7 @@ export default function MapView() {
           </div>
           <p className="mt-1 text-xs text-slate-500">
             Drag the blue line, or right-click on it, to drop a control node.
-            Drag nodes to reshape the route. Click a node to remove it.
+            Drag a node to move it; right-click a node to delete it.
           </p>
         </div>
         <button
@@ -620,8 +623,8 @@ export default function MapView() {
               <ul className="mt-3 space-y-1 border-t border-slate-100 pt-3 text-[11px] leading-snug text-slate-500">
                 <li>• Drag the blue line → new node appears at drag point</li>
                 <li>• Right-click on the line → drop a node without dragging</li>
-                <li>• Drag a node → reshape only that segment</li>
-                <li>• Click a node → remove it</li>
+                <li>• Drag a node → move it to a new position</li>
+                <li>• Right-click a node → delete it</li>
               </ul>
             </div>
           )}
