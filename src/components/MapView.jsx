@@ -12,6 +12,13 @@ const SITE_COLOR = '#7C7C8A'
 const SELECTED_COLOR = '#2563EB'
 const ORIGINAL_ROUTE_COLOR = '#9CA3AF'
 const CUSTOM_ROUTE_COLOR = '#2563EB'
+const NODE_COLOR = '#2563EB'
+const NODE_HOVER_COLOR = '#DC2626'
+
+// Right-click-to-add-node distance threshold, in screen pixels. If the user
+// right-clicks farther than this from the current route we ignore it, since
+// the intent is "add a control point ON the route", not "detour via here".
+const ADD_NODE_PIXEL_THRESHOLD = 30
 
 function pinSvg(color, scale = 1) {
   const w = 32 * scale
@@ -24,6 +31,26 @@ function pinSvg(color, scale = 1) {
   return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`
 }
 
+function nodeSvg(color = NODE_COLOR) {
+  const svg = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+      <circle cx="9" cy="9" r="7" fill="#ffffff" stroke="${color}" stroke-width="2.5"/>
+      <circle cx="9" cy="9" r="3" fill="${color}"/>
+    </svg>`
+  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`
+}
+
+function toLatLng(loc) {
+  if (loc && typeof loc.lat === 'function') return loc
+  return new window.google.maps.LatLng(loc.lat, loc.lng)
+}
+
+// meters-per-pixel at a given lat/zoom — used to convert our pixel threshold
+// into a spherical distance for the on-route check.
+function metersPerPixel(lat, zoom) {
+  return (156543.03392 * Math.cos((lat * Math.PI) / 180)) / Math.pow(2, zoom)
+}
+
 export default function MapView() {
   const mapContainerRef = useRef(null)
   const mapRef = useRef(null)
@@ -31,7 +58,21 @@ export default function MapView() {
   const directionsServiceRef = useRef(null)
   const originalRendererRef = useRef(null)
   const customRendererRef = useRef(null)
+  const waypointMarkersRef = useRef([])
   const routeVersionRef = useRef(0)
+  const currentWaypointsRef = useRef([])
+  const currentOverviewPathRef = useRef([])
+  // True while we're pushing a self-authored directions result into the
+  // renderer. In some Maps API builds `result.request.waypoints` comes back
+  // empty for programmatic setDirections calls, so during this window we
+  // trust `currentWaypointsRef` as the source of truth instead of the result.
+  const isProgrammaticChangeRef = useRef(false)
+
+  // Refs mirroring state so event handlers registered once at mount can read
+  // the latest values without being re-bound.
+  const originIdRef = useRef(null)
+  const destinationIdRef = useRef(null)
+  const siteByIdRef = useRef({})
 
   const [status, setStatus] = useState('loading') // loading | ready | error
   const [errorMessage, setErrorMessage] = useState('')
@@ -43,12 +84,23 @@ export default function MapView() {
     MAP_SITES.find((s) => s.role === 'destination')?.id ?? MAP_SITES.at(-1)?.id,
   )
   const [routeSummary, setRouteSummary] = useState(null)
+  const [nodeCount, setNodeCount] = useState(0)
   const [isCustomised, setIsCustomised] = useState(false)
 
   const siteById = useMemo(
     () => Object.fromEntries(MAP_SITES.map((s) => [s.id, s])),
     [],
   )
+
+  useEffect(() => {
+    originIdRef.current = originId
+  }, [originId])
+  useEffect(() => {
+    destinationIdRef.current = destinationId
+  }, [destinationId])
+  useEffect(() => {
+    siteByIdRef.current = siteById
+  }, [siteById])
 
   useEffect(() => {
     let cancelled = false
@@ -63,13 +115,12 @@ export default function MapView() {
           mapTypeControl: false,
           streetViewControl: false,
           fullscreenControl: false,
+          clickableIcons: false,
         })
         mapRef.current = map
 
         directionsServiceRef.current = new google.maps.DirectionsService()
 
-        // Ghost of the original fastest route — stays fixed so the user can
-        // compare it to their dragged version.
         originalRendererRef.current = new google.maps.DirectionsRenderer({
           map,
           suppressMarkers: true,
@@ -81,8 +132,9 @@ export default function MapView() {
           },
         })
 
-        // The interactive route — draggable so the user can bend it to fit a
-        // preferred path, exactly like Google Maps' own route editor.
+        // draggable: true keeps Google's built-in "grab-and-drag the route"
+        // gesture — when the user drags a segment we hear about it via
+        // directions_changed and materialise a visible control node there.
         customRendererRef.current = new google.maps.DirectionsRenderer({
           map,
           draggable: true,
@@ -95,19 +147,17 @@ export default function MapView() {
           },
         })
 
-        customRendererRef.current.addListener('directions_changed', () => {
-          const result = customRendererRef.current.getDirections()
-          const route = result?.routes?.[0]
-          if (!route) return
-          const leg = route.legs?.[0]
-          const waypoints = result.request?.waypoints ?? []
-          setIsCustomised(waypoints.length > 0)
-          setRouteSummary({
-            distance: leg?.distance?.text ?? '—',
-            duration: leg?.duration?.text ?? '—',
-            summary: route.summary || 'Custom path',
-            waypointCount: waypoints.length,
-          })
+        customRendererRef.current.addListener(
+          'directions_changed',
+          handleDirectionsChanged,
+        )
+
+        // Right-click on (or very near) the route to explicitly drop a node
+        // without having to drag first.
+        map.addListener('rightclick', (e) => {
+          if (!e.latLng) return
+          if (!isNearCurrentRoute(e.latLng)) return
+          addNodeAt(e.latLng)
         })
 
         MAP_SITES.forEach((site) => {
@@ -135,7 +185,9 @@ export default function MapView() {
 
     return () => {
       cancelled = true
+      clearNodeMarkers()
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Re-colour the pins whenever selection or endpoints change.
@@ -162,8 +214,8 @@ export default function MapView() {
     if (!service || !origin || !destination || origin.id === destination.id) return
 
     const version = ++routeVersionRef.current
-    setIsCustomised(false)
-    setRouteSummary(null)
+    currentWaypointsRef.current = []
+    isProgrammaticChangeRef.current = true
 
     service.route(
       {
@@ -174,18 +226,15 @@ export default function MapView() {
       (result, statusCode) => {
         if (version !== routeVersionRef.current) return
         if (statusCode !== window.google.maps.DirectionsStatus.OK || !result) {
+          isProgrammaticChangeRef.current = false
           setErrorMessage(`Directions request failed: ${statusCode}`)
           return
         }
         originalRendererRef.current?.setDirections(result)
         customRendererRef.current?.setDirections(result)
-        const leg = result.routes?.[0]?.legs?.[0]
-        setRouteSummary({
-          distance: leg?.distance?.text ?? '—',
-          duration: leg?.duration?.text ?? '—',
-          summary: result.routes?.[0]?.summary || 'Fastest path',
-          waypointCount: 0,
-        })
+        setTimeout(() => {
+          isProgrammaticChangeRef.current = false
+        }, 50)
 
         const bounds = new window.google.maps.LatLngBounds()
         result.routes?.[0]?.overview_path?.forEach((p) => bounds.extend(p))
@@ -194,15 +243,195 @@ export default function MapView() {
     )
   }, [status, originId, destinationId, siteById])
 
+  function handleDirectionsChanged() {
+    const renderer = customRendererRef.current
+    const result = renderer?.getDirections()
+    const route = result?.routes?.[0]
+    if (!route) return
+
+    const waypoints = isProgrammaticChangeRef.current
+      ? currentWaypointsRef.current
+      : (result.request?.waypoints ?? [])
+    currentWaypointsRef.current = waypoints
+    currentOverviewPathRef.current = route.overview_path ?? []
+
+    const leg = route.legs?.[0]
+    setNodeCount(waypoints.length)
+    setIsCustomised(waypoints.length > 0)
+    setRouteSummary({
+      distance: leg?.distance?.text ?? '—',
+      duration: leg?.duration?.text ?? '—',
+      summary: route.summary || (waypoints.length ? 'Custom path' : 'Fastest path'),
+      waypointCount: waypoints.length,
+    })
+
+    rebuildNodeMarkers(waypoints)
+  }
+
+  function clearNodeMarkers() {
+    waypointMarkersRef.current.forEach((m) => m.setMap(null))
+    waypointMarkersRef.current = []
+  }
+
+  function rebuildNodeMarkers(waypoints) {
+    const google = window.google
+    if (!google || !mapRef.current) return
+
+    clearNodeMarkers()
+
+    waypoints.forEach((wp, index) => {
+      const position = toLatLng(wp.location)
+      const marker = new google.maps.Marker({
+        position,
+        map: mapRef.current,
+        draggable: true,
+        crossOnDrag: false,
+        icon: makeNodeIcon(NODE_COLOR),
+        title: 'Control node — drag to move, click to remove',
+        zIndex: 1000 + index,
+      })
+      marker.addListener('mouseover', () => {
+        marker.setIcon(makeNodeIcon(NODE_HOVER_COLOR))
+      })
+      marker.addListener('mouseout', () => {
+        marker.setIcon(makeNodeIcon(NODE_COLOR))
+      })
+      marker.addListener('click', () => deleteNode(index))
+      marker.addListener('dragend', (e) => {
+        if (e.latLng) moveNode(index, e.latLng)
+      })
+      waypointMarkersRef.current.push(marker)
+    })
+  }
+
+  function makeNodeIcon(color) {
+    const google = window.google
+    return {
+      url: nodeSvg(color),
+      scaledSize: new google.maps.Size(18, 18),
+      anchor: new google.maps.Point(9, 9),
+    }
+  }
+
+  function deleteNode(index) {
+    const wps = currentWaypointsRef.current.filter((_, i) => i !== index)
+    rerouteWithWaypoints(wps)
+  }
+
+  function moveNode(index, latLng) {
+    const wps = currentWaypointsRef.current.map((wp, i) =>
+      i === index
+        ? { location: { lat: latLng.lat(), lng: latLng.lng() }, stopover: false }
+        : wp,
+    )
+    rerouteWithWaypoints(wps)
+  }
+
+  function addNodeAt(latLng) {
+    const google = window.google
+    const spherical = google.maps.geometry.spherical
+    const origin = siteByIdRef.current[originIdRef.current]?.position
+    const destination = siteByIdRef.current[destinationIdRef.current]?.position
+    if (!origin || !destination) return
+
+    const originLL = new google.maps.LatLng(origin.lat, origin.lng)
+    const destLL = new google.maps.LatLng(destination.lat, destination.lng)
+    const waypoints = currentWaypointsRef.current
+    const points = [
+      originLL,
+      ...waypoints.map((w) => toLatLng(w.location)),
+      destLL,
+    ]
+
+    // Pick the segment where inserting the new node adds the least detour.
+    let bestIndex = 0
+    let bestDetour = Infinity
+    for (let i = 0; i < points.length - 1; i++) {
+      const d1 = spherical.computeDistanceBetween(points[i], latLng)
+      const d2 = spherical.computeDistanceBetween(points[i + 1], latLng)
+      const seg = spherical.computeDistanceBetween(points[i], points[i + 1])
+      const detour = d1 + d2 - seg
+      if (detour < bestDetour) {
+        bestDetour = detour
+        bestIndex = i
+      }
+    }
+
+    const newWp = {
+      location: { lat: latLng.lat(), lng: latLng.lng() },
+      stopover: false,
+    }
+    const wps = [
+      ...waypoints.slice(0, bestIndex),
+      newWp,
+      ...waypoints.slice(bestIndex),
+    ]
+    rerouteWithWaypoints(wps)
+  }
+
+  function rerouteWithWaypoints(waypoints) {
+    const service = directionsServiceRef.current
+    const origin = siteByIdRef.current[originIdRef.current]?.position
+    const destination = siteByIdRef.current[destinationIdRef.current]?.position
+    if (!service || !origin || !destination) return
+
+    // Commit to the new waypoints immediately so the changed handler and any
+    // synchronous re-renders read consistent state.
+    currentWaypointsRef.current = waypoints
+    isProgrammaticChangeRef.current = true
+
+    service.route(
+      {
+        origin,
+        destination,
+        travelMode: window.google.maps.TravelMode.DRIVING,
+        waypoints,
+        optimizeWaypoints: false,
+      },
+      (result, statusCode) => {
+        if (statusCode !== window.google.maps.DirectionsStatus.OK || !result) {
+          isProgrammaticChangeRef.current = false
+          return
+        }
+        customRendererRef.current?.setDirections(result)
+        // The renderer's directions_changed may fire synchronously or on the
+        // next tick — give it a beat, then release the flag.
+        setTimeout(() => {
+          isProgrammaticChangeRef.current = false
+        }, 50)
+      },
+    )
+  }
+
+  function isNearCurrentRoute(latLng) {
+    const path = currentOverviewPathRef.current
+    if (!path.length) return false
+    const google = window.google
+    const spherical = google.maps.geometry.spherical
+    const zoom = mapRef.current?.getZoom() ?? 13
+    const thresholdMeters =
+      ADD_NODE_PIXEL_THRESHOLD * metersPerPixel(latLng.lat(), zoom)
+
+    // overview_path is already dense enough that closest-vertex is a fine
+    // proxy for closest-point-on-polyline at demo precision.
+    for (let i = 0; i < path.length; i++) {
+      if (spherical.computeDistanceBetween(path[i], latLng) <= thresholdMeters) {
+        return true
+      }
+    }
+    return false
+  }
+
   function handleReset() {
-    // Recompute the fastest path from scratch — clears any drag edits.
-    setOriginId(originId)
-    setDestinationId(destinationId)
     routeVersionRef.current++
     const service = directionsServiceRef.current
     const origin = siteById[originId]
     const destination = siteById[destinationId]
     if (!service || !origin || !destination) return
+
+    currentWaypointsRef.current = []
+    isProgrammaticChangeRef.current = true
+
     service.route(
       {
         origin: origin.position,
@@ -210,17 +439,15 @@ export default function MapView() {
         travelMode: window.google.maps.TravelMode.DRIVING,
       },
       (result, statusCode) => {
-        if (statusCode !== window.google.maps.DirectionsStatus.OK || !result) return
+        if (statusCode !== window.google.maps.DirectionsStatus.OK || !result) {
+          isProgrammaticChangeRef.current = false
+          return
+        }
         originalRendererRef.current?.setDirections(result)
         customRendererRef.current?.setDirections(result)
-        setIsCustomised(false)
-        const leg = result.routes?.[0]?.legs?.[0]
-        setRouteSummary({
-          distance: leg?.distance?.text ?? '—',
-          duration: leg?.duration?.text ?? '—',
-          summary: result.routes?.[0]?.summary || 'Fastest path',
-          waypointCount: 0,
-        })
+        setTimeout(() => {
+          isProgrammaticChangeRef.current = false
+        }, 50)
       },
     )
   }
@@ -242,8 +469,8 @@ export default function MapView() {
             </h1>
           </div>
           <p className="mt-1 text-xs text-slate-500">
-            Google Maps draws the fastest path between the two red pins. Grab
-            the blue line anywhere along its length to reshape the route.
+            Drag the blue line, or right-click on it, to drop a control node.
+            Drag nodes to reshape the route. Click a node to remove it.
           </p>
         </div>
         <button
@@ -258,7 +485,10 @@ export default function MapView() {
 
       <div className="flex min-h-0 flex-1">
         <aside className="flex w-[360px] shrink-0 flex-col border-r border-slate-200 bg-white">
-          <SectionHeader title="Sites" subtitle="Click a row to highlight on the map" />
+          <SectionHeader
+            title="Sites"
+            subtitle="Click a row to highlight on the map"
+          />
           <ul className="flex-1 overflow-y-auto ap-scrollbar-thin">
             {MAP_SITES.map((site) => {
               const isSelected = site.id === selectedId
@@ -297,9 +527,7 @@ export default function MapView() {
                         {site.address}
                       </span>
                       <span className="mt-1 flex flex-wrap gap-1">
-                        {isOrigin && (
-                          <Tag label="Origin" tone="red" />
-                        )}
+                        {isOrigin && <Tag label="Origin" tone="red" />}
                         {isDestination && (
                           <Tag label="Destination" tone="red" />
                         )}
@@ -359,7 +587,7 @@ export default function MapView() {
           )}
 
           {status === 'ready' && routeSummary && (
-            <div className="pointer-events-none absolute left-4 top-4 max-w-sm rounded-lg bg-white/95 p-4 shadow-lg ring-1 ring-slate-200 backdrop-blur">
+            <div className="absolute left-4 top-4 max-w-sm rounded-lg bg-white/95 p-4 shadow-lg ring-1 ring-slate-200 backdrop-blur">
               <div className="flex items-center gap-2">
                 <span
                   className={[
@@ -379,19 +607,22 @@ export default function MapView() {
                 <Stat label="Distance" value={routeSummary.distance} />
                 <Stat label="Duration" value={routeSummary.duration} />
               </div>
-              {isCustomised && (
-                <p className="mt-2 text-xs text-slate-500">
-                  {routeSummary.waypointCount} custom waypoint
-                  {routeSummary.waypointCount === 1 ? '' : 's'} — grey line
-                  shows the original fastest path for comparison.
-                </p>
-              )}
-              {!isCustomised && (
-                <p className="mt-2 text-xs text-slate-500">
-                  Tip: click anywhere on the blue line and drag it to reshape
-                  the route.
-                </p>
-              )}
+              <div className="mt-3 flex items-center justify-between text-xs text-slate-500">
+                <span>
+                  {nodeCount} control node{nodeCount === 1 ? '' : 's'}
+                </span>
+                {isCustomised && (
+                  <span className="text-slate-400">
+                    Grey line = original fastest
+                  </span>
+                )}
+              </div>
+              <ul className="mt-3 space-y-1 border-t border-slate-100 pt-3 text-[11px] leading-snug text-slate-500">
+                <li>• Drag the blue line → new node appears at drag point</li>
+                <li>• Right-click on the line → drop a node without dragging</li>
+                <li>• Drag a node → reshape only that segment</li>
+                <li>• Click a node → remove it</li>
+              </ul>
             </div>
           )}
         </section>
