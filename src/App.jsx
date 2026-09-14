@@ -3,7 +3,7 @@ import Overview from '@/components/Overview'
 import { useRightPanel } from '@/context/RightPanelContext'
 
 export default function App() {
-  const { imageSrc } = useRightPanel()
+  const { imageSrc, hasApplied } = useRightPanel()
 
   return (
     <div className="flex h-screen w-full flex-col overflow-hidden bg-white">
@@ -27,17 +27,23 @@ export default function App() {
       <div className="relative flex min-h-0 flex-1 items-stretch">
         <FiltersSidebar />
 
-        <main className="flex min-h-0 min-w-[680px] w-full flex-1 overflow-hidden bg-white">
-          <Overview />
-        </main>
+        {hasApplied ? (
+          <>
+            <main className="flex min-h-0 w-[680px] shrink-0 overflow-hidden bg-white">
+              <Overview />
+            </main>
 
-        <aside className="min-w-0 max-w-[799px] w-full shrink overflow-y-auto bg-white">
-          <img
-            src={imageSrc}
-            alt="Sites table and pinned notes"
-            className="block h-auto w-full max-w-full select-none"
-          />
-        </aside>
+            <aside className="min-w-0 flex-1 overflow-y-auto bg-white">
+              <img
+                src={imageSrc}
+                alt="Sites table and pinned notes"
+                className="block h-auto w-full max-w-full select-none"
+              />
+            </aside>
+          </>
+        ) : (
+          <div aria-hidden className="min-w-0 flex-1 bg-white" />
+        )}
       </div>
     </div>
   )

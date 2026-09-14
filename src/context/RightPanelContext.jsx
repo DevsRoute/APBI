@@ -1,4 +1,4 @@
-import { createContext, useContext, useMemo, useState } from 'react'
+import { createContext, useCallback, useContext, useMemo, useState } from 'react'
 
 const DEFAULT_IMAGE = '/right-panel.png'
 
@@ -17,6 +17,9 @@ const RightPanelContext = createContext(null)
 export function RightPanelProvider({ children }) {
   const [selectedStatus, setSelectedStatus] = useState(null)
   const [activeTab, setActiveTab] = useState('overview')
+  const [hasApplied, setHasApplied] = useState(false)
+
+  const markApplied = useCallback(() => setHasApplied(true), [])
 
   const value = useMemo(
     () => ({
@@ -24,12 +27,14 @@ export function RightPanelProvider({ children }) {
       setSelectedStatus,
       activeTab,
       setActiveTab,
+      hasApplied,
+      markApplied,
       imageSrc:
         activeTab === 'dead-deals'
           ? STATUS_IMAGES['Dead Deal']
           : STATUS_IMAGES[selectedStatus] ?? DEFAULT_IMAGE,
     }),
-    [selectedStatus, activeTab],
+    [selectedStatus, activeTab, hasApplied, markApplied],
   )
 
   return (
