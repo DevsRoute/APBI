@@ -2,6 +2,7 @@ import { useState } from 'react'
 import * as TabsPrimitive from '@radix-ui/react-tabs'
 
 import { Checkbox } from '@/components/ui/checkbox'
+import { useRightPanel } from '@/context/RightPanelContext'
 import { defaultChecked, location, people, timePeriod } from '@/data/filters'
 
 function CollapseArrow({ direction = 'left' }) {
@@ -161,6 +162,7 @@ function SidebarTabCard({ tabs, defaultValue = 'territory' }) {
 
 export default function FiltersSidebar() {
   const [isOpen, setIsOpen] = useState(true)
+  const { markApplied } = useRightPanel()
 
   const [checked, setChecked] = useState(() => {
     const initial = {}
@@ -289,6 +291,7 @@ export default function FiltersSidebar() {
           <div className="flex shrink-0 justify-end bg-[#F6F6F6] px-[16px] pt-[12px] pb-6">
             <button
               type="button"
+              onClick={markApplied}
               className="flex h-[35px] w-[78px] shrink-0 items-center justify-center rounded-[18px] border border-[#EFBC50] bg-[#F4C76B] font-poppins text-[14px] font-semibold leading-none tracking-normal text-[#404040] transition-colors hover:bg-[#F0BD58] focus:outline-none"
             >
               Apply
