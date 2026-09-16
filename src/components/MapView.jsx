@@ -61,6 +61,9 @@ export default function MapView() {
   const waypointMarkersRef = useRef([])
   const userMarkerRef = useRef(null)
   const userAccuracyCircleRef = useRef(null)
+  const watchIdRef = useRef(null)
+  const locateBtnRef = useRef(null)
+  const hasCenteredOnUserRef = useRef(false)
   const routeVersionRef = useRef(0)
   const currentWaypointsRef = useRef([])
   const currentOverviewPathRef = useRef([])
@@ -90,6 +93,7 @@ export default function MapView() {
   const [isCustomised, setIsCustomised] = useState(false)
   const [locationMessage, setLocationMessage] = useState(null)
   const [isLocating, setIsLocating] = useState(false)
+  const [isTracking, setIsTracking] = useState(false)
 
   const siteById = useMemo(
     () => Object.fromEntries(MAP_SITES.map((s) => [s.id, s])),
@@ -194,6 +198,7 @@ export default function MapView() {
         locateBtn.innerHTML =
           '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#5f6368" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>'
         locateBtn.addEventListener('click', locateMe)
+        locateBtnRef.current = locateBtn
         map.controls[google.maps.ControlPosition.RIGHT_BOTTOM].push(locateBtn)
 
         setStatus('ready')
@@ -207,6 +212,10 @@ export default function MapView() {
     return () => {
       cancelled = true
       clearNodeMarkers()
+      if (watchIdRef.current != null) {
+        navigator.geolocation.clearWatch(watchIdRef.current)
+        watchIdRef.current = null
+      }
       userMarkerRef.current?.setMap(null)
       userAccuracyCircleRef.current?.setMap(null)
       userMarkerRef.current = null
@@ -214,6 +223,18 @@ export default function MapView() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  useEffect(() => {
+    const btn = locateBtnRef.current
+    if (!btn) return
+    const stroke = isTracking ? '#1A73E8' : '#5f6368'
+    btn.title = isTracking ? 'Stop live tracking' : 'Show my location'
+    btn.setAttribute(
+      'aria-label',
+      isTracking ? 'Stop live tracking' : 'Show my location',
+    )
+    btn.innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="${stroke}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"${isTracking ? ` fill="${stroke}"` : ''}/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>`
+  }, [isTracking])
 
   // Re-colour the pins whenever selection or endpoints change.
   useEffect(() => {
@@ -444,10 +465,98 @@ export default function MapView() {
     return false
   }
 
-  function locateMe() {
+  function stopTracking() {
+    if (watchIdRef.current != null) {
+      navigator.geolocation.clearWatch(watchIdRef.current)
+      watchIdRef.current = null
+    }
+    setIsTracking(false)
+    setIsLocating(false)
+    hasCenteredOnUserRef.current = false
+  }
+
+  function handleLocationUpdate(position) {
     const map = mapRef.current
     const google = window.google
     if (!map || !google) return
+
+    setIsLocating(false)
+    const { latitude, longitude, accuracy } = position.coords
+    const pos = { lat: latitude, lng: longitude }
+
+    if (userMarkerRef.current) {
+      userMarkerRef.current.setPosition(pos)
+    } else {
+      userMarkerRef.current = new google.maps.Marker({
+        position: pos,
+        map,
+        title: 'Your location',
+        zIndex: 999998,
+        icon: {
+          path: google.maps.SymbolPath.CIRCLE,
+          scale: 8,
+          fillColor: '#1A73E8',
+          fillOpacity: 1,
+          strokeColor: '#ffffff',
+          strokeWeight: 3,
+        },
+      })
+    }
+
+    if (userAccuracyCircleRef.current) {
+      userAccuracyCircleRef.current.setCenter(pos)
+      userAccuracyCircleRef.current.setRadius(accuracy)
+    } else {
+      userAccuracyCircleRef.current = new google.maps.Circle({
+        map,
+        center: pos,
+        radius: accuracy,
+        strokeColor: '#1A73E8',
+        strokeOpacity: 0.4,
+        strokeWeight: 1,
+        fillColor: '#1A73E8',
+        fillOpacity: 0.12,
+        clickable: false,
+      })
+    }
+
+    // Only auto-center on the first fix so the map doesn't yank away while the
+    // user is panning around during a live-tracking session.
+    if (!hasCenteredOnUserRef.current) {
+      map.panTo(pos)
+      if ((map.getZoom() ?? 0) < 14) map.setZoom(15)
+      hasCenteredOnUserRef.current = true
+    }
+
+    const feet = Math.round(accuracy * 3.28084)
+    const label =
+      feet > 5280
+        ? `±${(feet / 5280).toFixed(1)} mi`
+        : `±${feet.toLocaleString()} ft`
+    setLocationMessage(`Tracking · ${label}`)
+  }
+
+  function handleLocationError(err) {
+    setIsLocating(false)
+    const msg =
+      err.code === err.PERMISSION_DENIED
+        ? 'Location permission denied. Enable it in your browser settings.'
+        : err.code === err.POSITION_UNAVAILABLE
+          ? "Couldn't determine your location. Try again with Wi-Fi enabled."
+          : err.code === err.TIMEOUT
+            ? 'Location request timed out. Please try again.'
+            : 'Unable to retrieve your location.'
+    setLocationMessage(msg)
+    stopTracking()
+  }
+
+  function locateMe() {
+    if (watchIdRef.current != null) {
+      stopTracking()
+      setLocationMessage('Live tracking stopped')
+      setTimeout(() => setLocationMessage(null), 2000)
+      return
+    }
 
     if (!navigator.geolocation) {
       setLocationMessage('Geolocation is not supported by this browser.')
@@ -455,74 +564,14 @@ export default function MapView() {
     }
 
     setIsLocating(true)
+    setIsTracking(true)
     setLocationMessage(null)
+    hasCenteredOnUserRef.current = false
 
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        setIsLocating(false)
-        const { latitude, longitude, accuracy } = position.coords
-        const pos = { lat: latitude, lng: longitude }
-
-        if (userMarkerRef.current) {
-          userMarkerRef.current.setPosition(pos)
-        } else {
-          userMarkerRef.current = new google.maps.Marker({
-            position: pos,
-            map,
-            title: 'Your location',
-            zIndex: 999998,
-            icon: {
-              path: google.maps.SymbolPath.CIRCLE,
-              scale: 8,
-              fillColor: '#1A73E8',
-              fillOpacity: 1,
-              strokeColor: '#ffffff',
-              strokeWeight: 3,
-            },
-          })
-        }
-
-        if (userAccuracyCircleRef.current) {
-          userAccuracyCircleRef.current.setCenter(pos)
-          userAccuracyCircleRef.current.setRadius(accuracy)
-        } else {
-          userAccuracyCircleRef.current = new google.maps.Circle({
-            map,
-            center: pos,
-            radius: accuracy,
-            strokeColor: '#1A73E8',
-            strokeOpacity: 0.4,
-            strokeWeight: 1,
-            fillColor: '#1A73E8',
-            fillOpacity: 0.12,
-            clickable: false,
-          })
-        }
-
-        map.panTo(pos)
-        if ((map.getZoom() ?? 0) < 14) map.setZoom(15)
-
-        const feet = Math.round(accuracy * 3.28084)
-        const label =
-          feet > 5280
-            ? `±${(feet / 5280).toFixed(1)} mi`
-            : `±${feet.toLocaleString()} ft`
-        setLocationMessage(`Location found (${label} accuracy)`)
-        setTimeout(() => setLocationMessage(null), 4000)
-      },
-      (err) => {
-        setIsLocating(false)
-        const msg =
-          err.code === err.PERMISSION_DENIED
-            ? 'Location permission denied. Enable it in your browser settings.'
-            : err.code === err.POSITION_UNAVAILABLE
-              ? "Couldn't determine your location. Try again with Wi-Fi enabled."
-              : err.code === err.TIMEOUT
-                ? 'Location request timed out. Please try again.'
-                : 'Unable to retrieve your location.'
-        setLocationMessage(msg)
-      },
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 },
+    watchIdRef.current = navigator.geolocation.watchPosition(
+      handleLocationUpdate,
+      handleLocationError,
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 2000 },
     )
   }
 
