@@ -59,6 +59,8 @@ export default function MapView() {
   const originalRendererRef = useRef(null)
   const customRendererRef = useRef(null)
   const waypointMarkersRef = useRef([])
+  const userMarkerRef = useRef(null)
+  const userAccuracyCircleRef = useRef(null)
   const routeVersionRef = useRef(0)
   const currentWaypointsRef = useRef([])
   const currentOverviewPathRef = useRef([])
@@ -86,6 +88,8 @@ export default function MapView() {
   const [routeSummary, setRouteSummary] = useState(null)
   const [nodeCount, setNodeCount] = useState(0)
   const [isCustomised, setIsCustomised] = useState(false)
+  const [locationMessage, setLocationMessage] = useState(null)
+  const [isLocating, setIsLocating] = useState(false)
 
   const siteById = useMemo(
     () => Object.fromEntries(MAP_SITES.map((s) => [s.id, s])),
@@ -181,6 +185,17 @@ export default function MapView() {
           markersRef.current.set(site.id, marker)
         })
 
+        const locateBtn = document.createElement('button')
+        locateBtn.type = 'button'
+        locateBtn.title = 'Show my location'
+        locateBtn.setAttribute('aria-label', 'Show my location')
+        locateBtn.style.cssText =
+          'margin:0 10px 20px 0;width:40px;height:40px;border-radius:50%;border:none;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,0.3);cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;'
+        locateBtn.innerHTML =
+          '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#5f6368" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>'
+        locateBtn.addEventListener('click', locateMe)
+        map.controls[google.maps.ControlPosition.RIGHT_BOTTOM].push(locateBtn)
+
         setStatus('ready')
       })
       .catch((err) => {
@@ -192,6 +207,10 @@ export default function MapView() {
     return () => {
       cancelled = true
       clearNodeMarkers()
+      userMarkerRef.current?.setMap(null)
+      userAccuracyCircleRef.current?.setMap(null)
+      userMarkerRef.current = null
+      userAccuracyCircleRef.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -425,6 +444,88 @@ export default function MapView() {
     return false
   }
 
+  function locateMe() {
+    const map = mapRef.current
+    const google = window.google
+    if (!map || !google) return
+
+    if (!navigator.geolocation) {
+      setLocationMessage('Geolocation is not supported by this browser.')
+      return
+    }
+
+    setIsLocating(true)
+    setLocationMessage(null)
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setIsLocating(false)
+        const { latitude, longitude, accuracy } = position.coords
+        const pos = { lat: latitude, lng: longitude }
+
+        if (userMarkerRef.current) {
+          userMarkerRef.current.setPosition(pos)
+        } else {
+          userMarkerRef.current = new google.maps.Marker({
+            position: pos,
+            map,
+            title: 'Your location',
+            zIndex: 999998,
+            icon: {
+              path: google.maps.SymbolPath.CIRCLE,
+              scale: 8,
+              fillColor: '#1A73E8',
+              fillOpacity: 1,
+              strokeColor: '#ffffff',
+              strokeWeight: 3,
+            },
+          })
+        }
+
+        if (userAccuracyCircleRef.current) {
+          userAccuracyCircleRef.current.setCenter(pos)
+          userAccuracyCircleRef.current.setRadius(accuracy)
+        } else {
+          userAccuracyCircleRef.current = new google.maps.Circle({
+            map,
+            center: pos,
+            radius: accuracy,
+            strokeColor: '#1A73E8',
+            strokeOpacity: 0.4,
+            strokeWeight: 1,
+            fillColor: '#1A73E8',
+            fillOpacity: 0.12,
+            clickable: false,
+          })
+        }
+
+        map.panTo(pos)
+        if ((map.getZoom() ?? 0) < 14) map.setZoom(15)
+
+        const feet = Math.round(accuracy * 3.28084)
+        const label =
+          feet > 5280
+            ? `±${(feet / 5280).toFixed(1)} mi`
+            : `±${feet.toLocaleString()} ft`
+        setLocationMessage(`Location found (${label} accuracy)`)
+        setTimeout(() => setLocationMessage(null), 4000)
+      },
+      (err) => {
+        setIsLocating(false)
+        const msg =
+          err.code === err.PERMISSION_DENIED
+            ? 'Location permission denied. Enable it in your browser settings.'
+            : err.code === err.POSITION_UNAVAILABLE
+              ? "Couldn't determine your location. Try again with Wi-Fi enabled."
+              : err.code === err.TIMEOUT
+                ? 'Location request timed out. Please try again.'
+                : 'Unable to retrieve your location.'
+        setLocationMessage(msg)
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 },
+    )
+  }
+
   function handleReset() {
     routeVersionRef.current++
     const service = directionsServiceRef.current
@@ -567,6 +668,12 @@ export default function MapView() {
 
         <section className="relative min-w-0 flex-1">
           <div ref={mapContainerRef} className="absolute inset-0" />
+
+          {(locationMessage || isLocating) && (
+            <div className="pointer-events-none absolute bottom-6 left-1/2 z-10 -translate-x-1/2 rounded-full bg-slate-900/90 px-4 py-2 text-xs font-medium text-white shadow-lg">
+              {isLocating ? 'Locating…' : locationMessage}
+            </div>
+          )}
 
           {status === 'loading' && (
             <OverlayCard>
