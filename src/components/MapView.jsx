@@ -588,7 +588,7 @@ export default function MapView() {
       </header>
 
       <div className="flex min-h-0 flex-1">
-        <aside className="flex w-[360px] shrink-0 flex-col border-r border-slate-200 bg-white">
+        <aside className="hidden w-[360px] shrink-0 flex-col border-r border-slate-200 bg-white md:flex">
           <SectionHeader
             title="Sites"
             subtitle="Click a row to highlight on the map"
