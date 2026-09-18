@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 
+import {
+  getAuthorizedPort,
+  isWebSerialSupported,
+  openGpsStream,
+  requestPort,
+} from '@/lib/gpsSerial'
 import { loadGoogleMaps } from '@/lib/loadGoogleMaps'
 import { MAP_CENTER, MAP_SITES } from '@/data/mapSites'
 
@@ -63,6 +69,9 @@ export default function MapView() {
   const userAccuracyCircleRef = useRef(null)
   const watchIdRef = useRef(null)
   const locateBtnRef = useRef(null)
+  const gpsBtnRef = useRef(null)
+  const gpsHandleRef = useRef(null)
+  const wasBrowserTrackingRef = useRef(false)
   const hasCenteredOnUserRef = useRef(false)
   const routeVersionRef = useRef(0)
   const currentWaypointsRef = useRef([])
@@ -94,6 +103,9 @@ export default function MapView() {
   const [locationMessage, setLocationMessage] = useState(null)
   const [isLocating, setIsLocating] = useState(false)
   const [isTracking, setIsTracking] = useState(false)
+  const [isGpsConnected, setIsGpsConnected] = useState(false)
+  const [isGpsConnecting, setIsGpsConnecting] = useState(false)
+  const [hasAuthorizedGpsPort, setHasAuthorizedGpsPort] = useState(false)
 
   const siteById = useMemo(
     () => Object.fromEntries(MAP_SITES.map((s) => [s.id, s])),
@@ -201,6 +213,26 @@ export default function MapView() {
         locateBtnRef.current = locateBtn
         map.controls[google.maps.ControlPosition.RIGHT_BOTTOM].push(locateBtn)
 
+        if (isWebSerialSupported()) {
+          const gpsBtn = document.createElement('button')
+          gpsBtn.type = 'button'
+          gpsBtn.title = 'Connect USB GPS receiver'
+          gpsBtn.setAttribute('aria-label', 'Connect USB GPS receiver')
+          gpsBtn.style.cssText =
+            'margin:0 10px 8px 0;width:40px;height:40px;border-radius:50%;border:none;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,0.3);cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;'
+          gpsBtn.innerHTML =
+            '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#5f6368" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 0 1 10 10"/><path d="M12 6a6 6 0 0 1 6 6"/><circle cx="12" cy="12" r="2" fill="#5f6368"/></svg>'
+          gpsBtn.addEventListener('click', toggleGps)
+          gpsBtnRef.current = gpsBtn
+          map.controls[google.maps.ControlPosition.RIGHT_BOTTOM].push(gpsBtn)
+
+          getAuthorizedPort()
+            .then((port) => {
+              if (port) setHasAuthorizedGpsPort(true)
+            })
+            .catch(() => {})
+        }
+
         setStatus('ready')
       })
       .catch((err) => {
@@ -215,6 +247,10 @@ export default function MapView() {
       if (watchIdRef.current != null) {
         navigator.geolocation.clearWatch(watchIdRef.current)
         watchIdRef.current = null
+      }
+      if (gpsHandleRef.current) {
+        gpsHandleRef.current.disconnect().catch(() => {})
+        gpsHandleRef.current = null
       }
       userMarkerRef.current?.setMap(null)
       userAccuracyCircleRef.current?.setMap(null)
@@ -235,6 +271,22 @@ export default function MapView() {
     )
     btn.innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="${stroke}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"${isTracking ? ` fill="${stroke}"` : ''}/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>`
   }, [isTracking])
+
+  useEffect(() => {
+    const btn = gpsBtnRef.current
+    if (!btn) return
+    const stroke = isGpsConnected ? '#34A853' : '#5f6368'
+    const label = isGpsConnected
+      ? 'Disconnect GPS'
+      : hasAuthorizedGpsPort
+        ? 'Reconnect GPS'
+        : 'Connect USB GPS receiver'
+    btn.title = label
+    btn.setAttribute('aria-label', label)
+    btn.disabled = isGpsConnecting
+    btn.style.opacity = isGpsConnecting ? '0.6' : '1'
+    btn.innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="${stroke}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 0 1 10 10"/><path d="M12 6a6 6 0 0 1 6 6"/><circle cx="12" cy="12" r="2" fill="${stroke}"/></svg>`
+  }, [isGpsConnected, isGpsConnecting, hasAuthorizedGpsPort])
 
   // Re-colour the pins whenever selection or endpoints change.
   useEffect(() => {
@@ -475,13 +527,17 @@ export default function MapView() {
     hasCenteredOnUserRef.current = false
   }
 
-  function handleLocationUpdate(position) {
+  function formatAccuracy(meters) {
+    const feet = Math.round(meters * 3.28084)
+    if (feet > 5280) return `±${(feet / 5280).toFixed(1)} mi`
+    return `±${feet.toLocaleString()} ft`
+  }
+
+  function renderPosition({ latitude, longitude, accuracy, sourceLabel }) {
     const map = mapRef.current
     const google = window.google
     if (!map || !google) return
 
-    setIsLocating(false)
-    const { latitude, longitude, accuracy } = position.coords
     const pos = { lat: latitude, lng: longitude }
 
     if (userMarkerRef.current) {
@@ -528,12 +584,18 @@ export default function MapView() {
       hasCenteredOnUserRef.current = true
     }
 
-    const feet = Math.round(accuracy * 3.28084)
-    const label =
-      feet > 5280
-        ? `±${(feet / 5280).toFixed(1)} mi`
-        : `±${feet.toLocaleString()} ft`
-    setLocationMessage(`Tracking · ${label}`)
+    setLocationMessage(`${sourceLabel} · ${formatAccuracy(accuracy)}`)
+  }
+
+  function handleLocationUpdate(position) {
+    setIsLocating(false)
+    const { latitude, longitude, accuracy } = position.coords
+    renderPosition({
+      latitude,
+      longitude,
+      accuracy,
+      sourceLabel: 'Tracking',
+    })
   }
 
   function handleLocationError(err) {
@@ -573,6 +635,98 @@ export default function MapView() {
       handleLocationError,
       { enableHighAccuracy: true, timeout: 10000, maximumAge: 2000 },
     )
+  }
+
+  function handleGpsFix(fix) {
+    const sats = fix.satellites != null ? ` · ${fix.satellites} sats` : ''
+    const hdop = fix.hdop != null ? ` · HDOP ${fix.hdop.toFixed(1)}` : ''
+    renderPosition({
+      latitude: fix.latitude,
+      longitude: fix.longitude,
+      accuracy: fix.accuracy,
+      sourceLabel: `GPS${sats}${hdop}`,
+    })
+  }
+
+  function handleGpsError() {
+    setLocationMessage('GPS device disconnected.')
+    disconnectGps({ silent: true })
+  }
+
+  async function disconnectGps({ silent } = {}) {
+    if (gpsHandleRef.current) {
+      try {
+        await gpsHandleRef.current.disconnect()
+      } catch {}
+      gpsHandleRef.current = null
+    }
+    setIsGpsConnected(false)
+
+    // If browser tracking was paused when GPS took over, resume it now so the
+    // dot doesn't just freeze in place.
+    if (wasBrowserTrackingRef.current && watchIdRef.current == null) {
+      wasBrowserTrackingRef.current = false
+      setIsTracking(true)
+      hasCenteredOnUserRef.current = false
+      watchIdRef.current = navigator.geolocation.watchPosition(
+        handleLocationUpdate,
+        handleLocationError,
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 2000 },
+      )
+    }
+
+    if (!silent) {
+      setLocationMessage('GPS disconnected')
+      setTimeout(() => setLocationMessage(null), 2000)
+    }
+  }
+
+  async function toggleGps() {
+    if (gpsHandleRef.current) {
+      await disconnectGps()
+      return
+    }
+
+    if (!isWebSerialSupported()) {
+      setLocationMessage(
+        'USB GPS requires Chrome or Edge on desktop (Web Serial API).',
+      )
+      return
+    }
+
+    setIsGpsConnecting(true)
+    setLocationMessage('Connecting GPS…')
+
+    try {
+      const port = (await getAuthorizedPort()) ?? (await requestPort())
+      const handle = await openGpsStream(port, {
+        onFix: handleGpsFix,
+        onError: handleGpsError,
+      })
+      gpsHandleRef.current = handle
+      setIsGpsConnected(true)
+      setHasAuthorizedGpsPort(true)
+      hasCenteredOnUserRef.current = false
+
+      // GPS is authoritative — pause browser tracking while it's connected so
+      // the marker doesn't jitter between two sources.
+      if (watchIdRef.current != null) {
+        wasBrowserTrackingRef.current = true
+        navigator.geolocation.clearWatch(watchIdRef.current)
+        watchIdRef.current = null
+        setIsTracking(false)
+      }
+
+      setLocationMessage('GPS connected · waiting for fix…')
+    } catch (err) {
+      const msg =
+        err?.name === 'NotFoundError'
+          ? 'No GPS device selected.'
+          : `GPS connect failed: ${err?.message ?? err}`
+      setLocationMessage(msg)
+    } finally {
+      setIsGpsConnecting(false)
+    }
   }
 
   function handleReset() {
@@ -718,9 +872,13 @@ export default function MapView() {
         <section className="relative min-w-0 flex-1">
           <div ref={mapContainerRef} className="absolute inset-0" />
 
-          {(locationMessage || isLocating) && (
+          {(locationMessage || isLocating || isGpsConnecting) && (
             <div className="pointer-events-none absolute bottom-6 left-1/2 z-10 -translate-x-1/2 rounded-full bg-slate-900/90 px-4 py-2 text-xs font-medium text-white shadow-lg">
-              {isLocating ? 'Locating…' : locationMessage}
+              {isGpsConnecting
+                ? 'Connecting GPS…'
+                : isLocating
+                  ? 'Locating…'
+                  : locationMessage}
             </div>
           )}
 
