@@ -62,9 +62,18 @@ export default function MapView() {
   const mapRef = useRef(null)
   const markersRef = useRef(new Map())
   const directionsServiceRef = useRef(null)
+  // Gray, non-interactive reference route showing the original A→B fastest
+  // path, always visible underneath the editable segments so the user can
+  // see what they've changed vs. the default.
   const originalRendererRef = useRef(null)
-  const customRendererRef = useRef(null)
-  const waypointMarkersRef = useRef([])
+  // One route split into N independently editable segments. Each has its own
+  // DirectionsRenderer so dragging one segment only reshapes that segment.
+  const segmentsRef = useRef([])
+  // Ordered list of user-added control points between origin and destination.
+  // Each `{ id, position }`. These are the only markers users see on the route.
+  const intermediariesRef = useRef([])
+  const intermediaryMarkersRef = useRef(new Map())
+  const rebuildVersionRef = useRef(0)
   const userMarkerRef = useRef(null)
   const userAccuracyCircleRef = useRef(null)
   const watchIdRef = useRef(null)
@@ -73,14 +82,6 @@ export default function MapView() {
   const gpsHandleRef = useRef(null)
   const wasBrowserTrackingRef = useRef(false)
   const hasCenteredOnUserRef = useRef(false)
-  const routeVersionRef = useRef(0)
-  const currentWaypointsRef = useRef([])
-  const currentOverviewPathRef = useRef([])
-  // True while we're pushing a self-authored directions result into the
-  // renderer. In some Maps API builds `result.request.waypoints` comes back
-  // empty for programmatic setDirections calls, so during this window we
-  // trust `currentWaypointsRef` as the source of truth instead of the result.
-  const isProgrammaticChangeRef = useRef(false)
 
   // Refs mirroring state so event handlers registered once at mount can read
   // the latest values without being re-bound.
@@ -141,43 +142,11 @@ export default function MapView() {
 
         directionsServiceRef.current = new google.maps.DirectionsService()
 
-        originalRendererRef.current = new google.maps.DirectionsRenderer({
-          map,
-          suppressMarkers: true,
-          preserveViewport: true,
-          polylineOptions: {
-            strokeColor: ORIGINAL_ROUTE_COLOR,
-            strokeOpacity: 0.85,
-            strokeWeight: 5,
-          },
-        })
-
-        // draggable: true keeps Google's built-in "grab-and-drag the route"
-        // gesture — when the user drags a segment we hear about it via
-        // directions_changed and materialise a visible control node there.
-        customRendererRef.current = new google.maps.DirectionsRenderer({
-          map,
-          draggable: true,
-          suppressMarkers: true,
-          preserveViewport: true,
-          polylineOptions: {
-            strokeColor: CUSTOM_ROUTE_COLOR,
-            strokeOpacity: 0.95,
-            strokeWeight: 6,
-          },
-        })
-
-        customRendererRef.current.addListener(
-          'directions_changed',
-          handleDirectionsChanged,
-        )
-
-        // Right-click on (or very near) the route to explicitly drop a node
-        // without having to drag first.
+        // Right-click on any segment of the route → insert a new intermediary
+        // control point, splitting that segment in two.
         map.addListener('rightclick', (e) => {
           if (!e.latLng) return
-          if (!isNearCurrentRoute(e.latLng)) return
-          addNodeAt(e.latLng)
+          addIntermediaryAt(e.latLng)
         })
 
         // Kill the browser's native context menu inside the map so our own
@@ -243,7 +212,10 @@ export default function MapView() {
 
     return () => {
       cancelled = true
-      clearNodeMarkers()
+      clearSegments()
+      clearIntermediaryMarkers()
+      originalRendererRef.current?.setMap(null)
+      originalRendererRef.current = null
       if (watchIdRef.current != null) {
         navigator.geolocation.clearWatch(watchIdRef.current)
         watchIdRef.current = null
@@ -303,100 +275,42 @@ export default function MapView() {
     })
   }, [status, selectedId, originId, destinationId])
 
-  // (Re)compute the fastest route whenever origin/destination change.
+  // When origin/destination change, discard any existing intermediary points
+  // (they wouldn't make sense on the new route), rebuild segments, and refresh
+  // the gray original-fastest reference route.
   useEffect(() => {
     if (status !== 'ready') return
-    const service = directionsServiceRef.current
     const origin = siteById[originId]
     const destination = siteById[destinationId]
-    if (!service || !origin || !destination || origin.id === destination.id) return
-
-    const version = ++routeVersionRef.current
-    currentWaypointsRef.current = []
-    isProgrammaticChangeRef.current = true
-
-    service.route(
-      {
-        origin: origin.position,
-        destination: destination.position,
-        travelMode: window.google.maps.TravelMode.DRIVING,
-      },
-      (result, statusCode) => {
-        if (version !== routeVersionRef.current) return
-        if (statusCode !== window.google.maps.DirectionsStatus.OK || !result) {
-          isProgrammaticChangeRef.current = false
-          setErrorMessage(`Directions request failed: ${statusCode}`)
-          return
-        }
-        originalRendererRef.current?.setDirections(result)
-        customRendererRef.current?.setDirections(result)
-        setTimeout(() => {
-          isProgrammaticChangeRef.current = false
-        }, 50)
-
-        const bounds = new window.google.maps.LatLngBounds()
-        result.routes?.[0]?.overview_path?.forEach((p) => bounds.extend(p))
-        if (!bounds.isEmpty()) mapRef.current?.fitBounds(bounds, 64)
-      },
-    )
+    if (!origin || !destination || origin.id === destination.id) return
+    intermediariesRef.current = []
+    loadOriginalRoute()
+    rebuildAllSegments()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, originId, destinationId, siteById])
 
-  function handleDirectionsChanged() {
-    const renderer = customRendererRef.current
-    const result = renderer?.getDirections()
-    const route = result?.routes?.[0]
-    if (!route) return
-
-    const waypoints = isProgrammaticChangeRef.current
-      ? currentWaypointsRef.current
-      : (result.request?.waypoints ?? [])
-    currentWaypointsRef.current = waypoints
-    currentOverviewPathRef.current = route.overview_path ?? []
-
-    const leg = route.legs?.[0]
-    setNodeCount(waypoints.length)
-    setIsCustomised(waypoints.length > 0)
-    setRouteSummary({
-      distance: leg?.distance?.text ?? '—',
-      duration: leg?.duration?.text ?? '—',
-      summary: route.summary || (waypoints.length ? 'Custom path' : 'Fastest path'),
-      waypointCount: waypoints.length,
-    })
-
-    rebuildNodeMarkers(waypoints)
+  function pointsList() {
+    const originPos = siteByIdRef.current[originIdRef.current]?.position
+    const destPos = siteByIdRef.current[destinationIdRef.current]?.position
+    if (!originPos || !destPos) return []
+    return [
+      originPos,
+      ...intermediariesRef.current.map((i) => i.position),
+      destPos,
+    ]
   }
 
-  function clearNodeMarkers() {
-    waypointMarkersRef.current.forEach((m) => m.setMap(null))
-    waypointMarkersRef.current = []
+  function clearSegments() {
+    segmentsRef.current.forEach((seg) => {
+      if (seg.listener) seg.listener.remove()
+      seg.renderer?.setMap(null)
+    })
+    segmentsRef.current = []
   }
 
-  function rebuildNodeMarkers(waypoints) {
-    const google = window.google
-    if (!google || !mapRef.current) return
-
-    clearNodeMarkers()
-
-    waypoints.forEach((wp, index) => {
-      const position = toLatLng(wp.location)
-      const marker = new google.maps.Marker({
-        position,
-        map: mapRef.current,
-        draggable: true,
-        crossOnDrag: false,
-        // optimized: false forces per-marker DOM so zIndex is honoured over
-        // the DirectionsRenderer's built-in draggable waypoint handles.
-        optimized: false,
-        icon: makeNodeIcon(NODE_COLOR),
-        title: 'Drag to move · Right-click to delete',
-        zIndex: 999999 + index,
-      })
-      marker.addListener('dragend', (e) => {
-        if (e.latLng) moveNode(index, e.latLng)
-      })
-      marker.addListener('rightclick', () => deleteNode(index))
-      waypointMarkersRef.current.push(marker)
-    })
+  function clearIntermediaryMarkers() {
+    intermediaryMarkersRef.current.forEach((m) => m.setMap(null))
+    intermediaryMarkersRef.current.clear()
   }
 
   function makeNodeIcon(color) {
@@ -408,113 +322,301 @@ export default function MapView() {
     }
   }
 
-  function deleteNode(index) {
-    const wps = currentWaypointsRef.current.filter((_, i) => i !== index)
-    rerouteWithWaypoints(wps)
-  }
-
-  function moveNode(index, latLng) {
-    const wps = currentWaypointsRef.current.map((wp, i) =>
-      i === index
-        ? { location: { lat: latLng.lat(), lng: latLng.lng() }, stopover: false }
-        : wp,
-    )
-    rerouteWithWaypoints(wps)
-  }
-
-  function addNodeAt(latLng) {
+  function rebuildIntermediaryMarkers() {
     const google = window.google
-    const spherical = google.maps.geometry.spherical
-    const origin = siteByIdRef.current[originIdRef.current]?.position
-    const destination = siteByIdRef.current[destinationIdRef.current]?.position
-    if (!origin || !destination) return
-
-    const originLL = new google.maps.LatLng(origin.lat, origin.lng)
-    const destLL = new google.maps.LatLng(destination.lat, destination.lng)
-    const waypoints = currentWaypointsRef.current
-    const points = [
-      originLL,
-      ...waypoints.map((w) => toLatLng(w.location)),
-      destLL,
-    ]
-
-    // Pick the segment where inserting the new node adds the least detour.
-    let bestIndex = 0
-    let bestDetour = Infinity
-    for (let i = 0; i < points.length - 1; i++) {
-      const d1 = spherical.computeDistanceBetween(points[i], latLng)
-      const d2 = spherical.computeDistanceBetween(points[i + 1], latLng)
-      const seg = spherical.computeDistanceBetween(points[i], points[i + 1])
-      const detour = d1 + d2 - seg
-      if (detour < bestDetour) {
-        bestDetour = detour
-        bestIndex = i
-      }
-    }
-
-    const newWp = {
-      location: { lat: latLng.lat(), lng: latLng.lng() },
-      stopover: false,
-    }
-    const wps = [
-      ...waypoints.slice(0, bestIndex),
-      newWp,
-      ...waypoints.slice(bestIndex),
-    ]
-    rerouteWithWaypoints(wps)
+    const map = mapRef.current
+    if (!google || !map) return
+    clearIntermediaryMarkers()
+    intermediariesRef.current.forEach((cp) => {
+      const marker = new google.maps.Marker({
+        position: cp.position,
+        map,
+        draggable: true,
+        crossOnDrag: false,
+        // optimized: false forces per-marker DOM so zIndex wins over the
+        // small drag handles Google draws on draggable DirectionsRenderers.
+        optimized: false,
+        icon: makeNodeIcon(NODE_COLOR),
+        title: 'Drag to move · Right-click to delete',
+        zIndex: 999999,
+      })
+      marker.addListener('dragend', (e) => {
+        if (e.latLng) moveIntermediary(cp.id, e.latLng)
+      })
+      marker.addListener('rightclick', () => deleteIntermediary(cp.id))
+      intermediaryMarkersRef.current.set(cp.id, marker)
+    })
   }
 
-  function rerouteWithWaypoints(waypoints) {
+  function loadOriginalRoute() {
+    const google = window.google
+    const map = mapRef.current
     const service = directionsServiceRef.current
     const origin = siteByIdRef.current[originIdRef.current]?.position
     const destination = siteByIdRef.current[destinationIdRef.current]?.position
-    if (!service || !origin || !destination) return
+    if (!google || !map || !service || !origin || !destination) return
 
-    // Commit to the new waypoints immediately so the changed handler and any
-    // synchronous re-renders read consistent state.
-    currentWaypointsRef.current = waypoints
-    isProgrammaticChangeRef.current = true
+    if (originalRendererRef.current) {
+      originalRendererRef.current.setMap(null)
+    }
+    originalRendererRef.current = new google.maps.DirectionsRenderer({
+      map,
+      suppressMarkers: true,
+      preserveViewport: true,
+      clickable: false,
+      polylineOptions: {
+        strokeColor: ORIGINAL_ROUTE_COLOR,
+        strokeOpacity: 0.65,
+        strokeWeight: 5,
+        zIndex: 1,
+      },
+    })
+    const myRenderer = originalRendererRef.current
 
     service.route(
       {
         origin,
         destination,
-        travelMode: window.google.maps.TravelMode.DRIVING,
-        waypoints,
-        optimizeWaypoints: false,
+        travelMode: google.maps.TravelMode.DRIVING,
       },
       (result, statusCode) => {
-        if (statusCode !== window.google.maps.DirectionsStatus.OK || !result) {
-          isProgrammaticChangeRef.current = false
-          return
-        }
-        customRendererRef.current?.setDirections(result)
-        // The renderer's directions_changed may fire synchronously or on the
-        // next tick — give it a beat, then release the flag.
-        setTimeout(() => {
-          isProgrammaticChangeRef.current = false
-        }, 50)
+        if (myRenderer !== originalRendererRef.current) return
+        if (statusCode !== google.maps.DirectionsStatus.OK || !result) return
+        myRenderer.setDirections(result)
       },
     )
   }
 
-  function isNearCurrentRoute(latLng) {
-    const path = currentOverviewPathRef.current
-    if (!path.length) return false
-    const google = window.google
-    const spherical = google.maps.geometry.spherical
-    const zoom = mapRef.current?.getZoom() ?? 13
-    const thresholdMeters =
-      ADD_NODE_PIXEL_THRESHOLD * metersPerPixel(latLng.lat(), zoom)
-
-    // overview_path is already dense enough that closest-vertex is a fine
-    // proxy for closest-point-on-polyline at demo precision.
-    for (let i = 0; i < path.length; i++) {
-      if (spherical.computeDistanceBetween(path[i], latLng) <= thresholdMeters) {
-        return true
-      }
+  function createSegmentShell(startPos, endPos) {
+    return {
+      startPos,
+      endPos,
+      renderer: null,
+      listener: null,
+      shapingWaypoints: [],
+      modified: false,
+      isProgrammatic: false,
+      overviewPath: [],
     }
-    return false
+  }
+
+  // Tears down segment's renderer (if any) and reloads it with the given
+  // shape + colour. Used both for initial gray segments and for repainting
+  // blue when the user drags.
+  function loadSegmentRoute(segIdx, shapingWaypoints, modified) {
+    const google = window.google
+    const map = mapRef.current
+    const service = directionsServiceRef.current
+    const seg = segmentsRef.current[segIdx]
+    if (!google || !map || !service || !seg) return Promise.resolve()
+
+    if (seg.listener) {
+      seg.listener.remove()
+      seg.listener = null
+    }
+    if (seg.renderer) seg.renderer.setMap(null)
+
+    seg.renderer = new google.maps.DirectionsRenderer({
+      map,
+      draggable: true,
+      suppressMarkers: true,
+      preserveViewport: true,
+      polylineOptions: {
+        strokeColor: modified ? CUSTOM_ROUTE_COLOR : ORIGINAL_ROUTE_COLOR,
+        strokeOpacity: modified ? 0.95 : 0.9,
+        strokeWeight: modified ? 6 : 5,
+        // Sit on top of the gray original reference route.
+        zIndex: 10,
+      },
+    })
+    seg.modified = modified
+    seg.isProgrammatic = true
+    const myRenderer = seg.renderer
+
+    return new Promise((resolve) => {
+      service.route(
+        {
+          origin: seg.startPos,
+          destination: seg.endPos,
+          travelMode: google.maps.TravelMode.DRIVING,
+          waypoints: shapingWaypoints.map((p) => ({
+            location: p,
+            stopover: false,
+          })),
+          optimizeWaypoints: false,
+        },
+        (result, statusCode) => {
+          // Stale response: a newer load replaced our renderer.
+          if (myRenderer !== seg.renderer) {
+            resolve()
+            return
+          }
+          if (statusCode !== google.maps.DirectionsStatus.OK || !result) {
+            seg.isProgrammatic = false
+            resolve()
+            return
+          }
+          seg.renderer.setDirections(result)
+          seg.shapingWaypoints = shapingWaypoints
+          seg.overviewPath = result.routes?.[0]?.overview_path ?? []
+          seg.listener = seg.renderer.addListener('directions_changed', () =>
+            handleSegmentChanged(segIdx),
+          )
+          setTimeout(() => {
+            seg.isProgrammatic = false
+            resolve()
+          }, 50)
+        },
+      )
+    })
+  }
+
+  function shapesEqual(a, b) {
+    if (a.length !== b.length) return false
+    return a.every(
+      (p, i) =>
+        Math.abs(p.lat - b[i].lat) < 1e-7 &&
+        Math.abs(p.lng - b[i].lng) < 1e-7,
+    )
+  }
+
+  function handleSegmentChanged(segIdx) {
+    const seg = segmentsRef.current[segIdx]
+    if (!seg || seg.isProgrammatic) return
+    const result = seg.renderer.getDirections()
+    if (!result?.routes?.[0]) return
+    const raw = result.request?.waypoints ?? []
+    const newShaping = raw.map((w) => {
+      const loc = w.location
+      return typeof loc.lat === 'function'
+        ? { lat: loc.lat(), lng: loc.lng() }
+        : loc
+    })
+    if (seg.modified && shapesEqual(seg.shapingWaypoints, newShaping)) return
+    loadSegmentRoute(segIdx, newShaping, true).then(updateRouteSummary)
+  }
+
+  function formatDistance(meters) {
+    const mi = meters / 1609.344
+    if (mi >= 10) return `${mi.toFixed(0)} mi`
+    return `${mi.toFixed(1)} mi`
+  }
+
+  function formatDuration(seconds) {
+    if (seconds < 60) return `${Math.round(seconds)} s`
+    const mins = Math.round(seconds / 60)
+    if (mins < 60) return `${mins} min`
+    const h = Math.floor(mins / 60)
+    const rest = mins % 60
+    return rest === 0 ? `${h}h` : `${h}h ${rest}m`
+  }
+
+  function updateRouteSummary() {
+    let totalMeters = 0
+    let totalSeconds = 0
+    let hasAny = false
+    segmentsRef.current.forEach((seg) => {
+      const leg = seg.renderer?.getDirections()?.routes?.[0]?.legs?.[0]
+      if (leg?.distance?.value != null) {
+        totalMeters += leg.distance.value
+        totalSeconds += leg.duration?.value ?? 0
+        hasAny = true
+      }
+    })
+    const anyModified = segmentsRef.current.some((s) => s.modified)
+    setIsCustomised(anyModified)
+    setNodeCount(intermediariesRef.current.length)
+    if (!hasAny) {
+      setRouteSummary(null)
+      return
+    }
+    setRouteSummary({
+      distance: formatDistance(totalMeters),
+      duration: formatDuration(totalSeconds),
+      summary: anyModified ? 'Custom (per-segment)' : 'Fastest path',
+      waypointCount: intermediariesRef.current.length,
+    })
+  }
+
+  async function rebuildAllSegments() {
+    const google = window.google
+    const map = mapRef.current
+    if (!google || !map) return
+
+    const pts = pointsList()
+    if (pts.length < 2) return
+
+    const version = ++rebuildVersionRef.current
+    clearSegments()
+
+    segmentsRef.current = pts
+      .slice(0, -1)
+      .map((start, i) => createSegmentShell(start, pts[i + 1]))
+    rebuildIntermediaryMarkers()
+
+    await Promise.all(
+      segmentsRef.current.map((_, i) => loadSegmentRoute(i, [], false)),
+    )
+
+    if (version !== rebuildVersionRef.current) return
+
+    const bounds = new google.maps.LatLngBounds()
+    segmentsRef.current.forEach((seg) => {
+      seg.overviewPath?.forEach((p) => bounds.extend(p))
+    })
+    if (!bounds.isEmpty()) map.fitBounds(bounds, 64)
+
+    updateRouteSummary()
+  }
+
+  function findSegmentIndexForPoint(latLng) {
+    const google = window.google
+    if (!google || segmentsRef.current.length === 0) return -1
+    const spherical = google.maps.geometry.spherical
+
+    // Return whichever segment is closest — no threshold. Right-clicking
+    // anywhere on (or near) the route inserts a split into the nearest one.
+    let bestIdx = 0
+    let bestDist = Infinity
+    segmentsRef.current.forEach((seg, i) => {
+      seg.overviewPath?.forEach((pt) => {
+        const d = spherical.computeDistanceBetween(pt, latLng)
+        if (d < bestDist) {
+          bestDist = d
+          bestIdx = i
+        }
+      })
+    })
+    return bestIdx
+  }
+
+  function addIntermediaryAt(latLng) {
+    const segIdx = findSegmentIndexForPoint(latLng)
+    if (segIdx < 0) return
+    const id = `cp_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
+    const pos = { lat: latLng.lat(), lng: latLng.lng() }
+    intermediariesRef.current = [
+      ...intermediariesRef.current.slice(0, segIdx),
+      { id, position: pos },
+      ...intermediariesRef.current.slice(segIdx),
+    ]
+    rebuildAllSegments()
+  }
+
+  function deleteIntermediary(id) {
+    intermediariesRef.current = intermediariesRef.current.filter(
+      (cp) => cp.id !== id,
+    )
+    rebuildAllSegments()
+  }
+
+  function moveIntermediary(id, latLng) {
+    intermediariesRef.current = intermediariesRef.current.map((cp) =>
+      cp.id === id
+        ? { ...cp, position: { lat: latLng.lat(), lng: latLng.lng() } }
+        : cp,
+    )
+    rebuildAllSegments()
   }
 
   function stopTracking() {
@@ -730,33 +832,8 @@ export default function MapView() {
   }
 
   function handleReset() {
-    routeVersionRef.current++
-    const service = directionsServiceRef.current
-    const origin = siteById[originId]
-    const destination = siteById[destinationId]
-    if (!service || !origin || !destination) return
-
-    currentWaypointsRef.current = []
-    isProgrammaticChangeRef.current = true
-
-    service.route(
-      {
-        origin: origin.position,
-        destination: destination.position,
-        travelMode: window.google.maps.TravelMode.DRIVING,
-      },
-      (result, statusCode) => {
-        if (statusCode !== window.google.maps.DirectionsStatus.OK || !result) {
-          isProgrammaticChangeRef.current = false
-          return
-        }
-        originalRendererRef.current?.setDirections(result)
-        customRendererRef.current?.setDirections(result)
-        setTimeout(() => {
-          isProgrammaticChangeRef.current = false
-        }, 50)
-      },
-    )
+    intermediariesRef.current = []
+    rebuildAllSegments()
   }
 
   return (
@@ -776,8 +853,8 @@ export default function MapView() {
             </h1>
           </div>
           <p className="mt-1 text-xs text-slate-500">
-            Drag the blue line, or right-click on it, to drop a control node.
-            Drag a node to move it; right-click a node to delete it.
+            Right-click the route to split it into segments. Each segment is
+            independent — dragging one only reshapes that segment.
           </p>
         </div>
         <button
@@ -926,19 +1003,26 @@ export default function MapView() {
               </div>
               <div className="mt-3 flex items-center justify-between text-xs text-slate-500">
                 <span>
-                  {nodeCount} control node{nodeCount === 1 ? '' : 's'}
+                  {nodeCount} control point{nodeCount === 1 ? '' : 's'}
                 </span>
                 {isCustomised && (
                   <span className="text-slate-400">
-                    Grey line = original fastest
+                    Gray = original fastest
                   </span>
                 )}
               </div>
               <ul className="mt-3 space-y-1 border-t border-slate-100 pt-3 text-[11px] leading-snug text-slate-500">
-                <li>• Drag the blue line → new node appears at drag point</li>
-                <li>• Right-click on the line → drop a node without dragging</li>
-                <li>• Drag a node → move it to a new position</li>
-                <li>• Right-click a node → delete it</li>
+                <li>
+                  • Right-click a segment → splits it at that point (adds a
+                  control point)
+                </li>
+                <li>
+                  • Drag a segment → only that segment reshapes, turns blue
+                </li>
+                <li>• Drag a control point → moves it, adjacent segments update</li>
+                <li>
+                  • Right-click a control point → deletes it (segments merge)
+                </li>
               </ul>
             </div>
           )}
