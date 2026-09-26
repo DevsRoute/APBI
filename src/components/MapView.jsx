@@ -62,10 +62,6 @@ export default function MapView() {
   const mapRef = useRef(null)
   const markersRef = useRef(new Map())
   const directionsServiceRef = useRef(null)
-  // Gray, non-interactive reference route showing the original A→B fastest
-  // path, always visible underneath the editable segments so the user can
-  // see what they've changed vs. the default.
-  const originalRendererRef = useRef(null)
   // One route split into N independently editable segments. Each has its own
   // DirectionsRenderer so dragging one segment only reshapes that segment.
   const segmentsRef = useRef([])
@@ -107,6 +103,7 @@ export default function MapView() {
   const [isGpsConnected, setIsGpsConnected] = useState(false)
   const [isGpsConnecting, setIsGpsConnecting] = useState(false)
   const [hasAuthorizedGpsPort, setHasAuthorizedGpsPort] = useState(false)
+  const [contextMenu, setContextMenu] = useState(null) // { x, y, latLng } | null
 
   const siteById = useMemo(
     () => Object.fromEntries(MAP_SITES.map((s) => [s.id, s])),
@@ -142,11 +139,16 @@ export default function MapView() {
 
         directionsServiceRef.current = new google.maps.DirectionsService()
 
-        // Right-click on any segment of the route → insert a new intermediary
-        // control point, splitting that segment in two.
+        // Right-click on any segment of the route → open a small "Create
+        // Midpoint" menu. Actual insert happens when the user clicks the menu.
         map.addListener('rightclick', (e) => {
           if (!e.latLng) return
-          addIntermediaryAt(e.latLng)
+          const domEvent = e.domEvent
+          setContextMenu({
+            x: domEvent?.clientX ?? 0,
+            y: domEvent?.clientY ?? 0,
+            latLng: e.latLng,
+          })
         })
 
         // Kill the browser's native context menu inside the map so our own
@@ -214,8 +216,6 @@ export default function MapView() {
       cancelled = true
       clearSegments()
       clearIntermediaryMarkers()
-      originalRendererRef.current?.setMap(null)
-      originalRendererRef.current = null
       if (watchIdRef.current != null) {
         navigator.geolocation.clearWatch(watchIdRef.current)
         watchIdRef.current = null
@@ -260,6 +260,20 @@ export default function MapView() {
     btn.innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="${stroke}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 0 1 10 10"/><path d="M12 6a6 6 0 0 1 6 6"/><circle cx="12" cy="12" r="2" fill="${stroke}"/></svg>`
   }, [isGpsConnected, isGpsConnecting, hasAuthorizedGpsPort])
 
+  useEffect(() => {
+    if (!contextMenu) return
+    const close = () => setContextMenu(null)
+    const onKey = (e) => {
+      if (e.key === 'Escape') setContextMenu(null)
+    }
+    window.addEventListener('click', close)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('click', close)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [contextMenu])
+
   // Re-colour the pins whenever selection or endpoints change.
   useEffect(() => {
     if (status !== 'ready') return
@@ -284,7 +298,6 @@ export default function MapView() {
     const destination = siteById[destinationId]
     if (!origin || !destination || origin.id === destination.id) return
     intermediariesRef.current = []
-    loadOriginalRoute()
     rebuildAllSegments()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, originId, destinationId, siteById])
@@ -348,45 +361,6 @@ export default function MapView() {
     })
   }
 
-  function loadOriginalRoute() {
-    const google = window.google
-    const map = mapRef.current
-    const service = directionsServiceRef.current
-    const origin = siteByIdRef.current[originIdRef.current]?.position
-    const destination = siteByIdRef.current[destinationIdRef.current]?.position
-    if (!google || !map || !service || !origin || !destination) return
-
-    if (originalRendererRef.current) {
-      originalRendererRef.current.setMap(null)
-    }
-    originalRendererRef.current = new google.maps.DirectionsRenderer({
-      map,
-      suppressMarkers: true,
-      preserveViewport: true,
-      clickable: false,
-      polylineOptions: {
-        strokeColor: ORIGINAL_ROUTE_COLOR,
-        strokeOpacity: 0.65,
-        strokeWeight: 5,
-        zIndex: 1,
-      },
-    })
-    const myRenderer = originalRendererRef.current
-
-    service.route(
-      {
-        origin,
-        destination,
-        travelMode: google.maps.TravelMode.DRIVING,
-      },
-      (result, statusCode) => {
-        if (myRenderer !== originalRendererRef.current) return
-        if (statusCode !== google.maps.DirectionsStatus.OK || !result) return
-        myRenderer.setDirections(result)
-      },
-    )
-  }
-
   function createSegmentShell(startPos, endPos) {
     return {
       startPos,
@@ -422,11 +396,9 @@ export default function MapView() {
       suppressMarkers: true,
       preserveViewport: true,
       polylineOptions: {
-        strokeColor: modified ? CUSTOM_ROUTE_COLOR : ORIGINAL_ROUTE_COLOR,
-        strokeOpacity: modified ? 0.95 : 0.9,
-        strokeWeight: modified ? 6 : 5,
-        // Sit on top of the gray original reference route.
-        zIndex: 10,
+        strokeColor: CUSTOM_ROUTE_COLOR,
+        strokeOpacity: 0.95,
+        strokeWeight: 6,
       },
     })
     seg.modified = modified
@@ -853,8 +825,8 @@ export default function MapView() {
             </h1>
           </div>
           <p className="mt-1 text-xs text-slate-500">
-            Right-click the route to split it into segments. Each segment is
-            independent — dragging one only reshapes that segment.
+            Right-click the route and choose "Create Midpoint" to split it.
+            Each section can then be dragged independently.
           </p>
         </div>
         <button
@@ -949,6 +921,26 @@ export default function MapView() {
         <section className="relative min-w-0 flex-1">
           <div ref={mapContainerRef} className="absolute inset-0" />
 
+          {contextMenu && (
+            <div
+              className="fixed z-50 overflow-hidden rounded-md border border-slate-200 bg-white py-1 text-sm shadow-lg"
+              style={{ left: contextMenu.x, top: contextMenu.y }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <button
+                type="button"
+                className="block w-full px-4 py-2 text-left text-slate-800 hover:bg-slate-100"
+                onClick={() => {
+                  const latLng = contextMenu.latLng
+                  setContextMenu(null)
+                  if (latLng) addIntermediaryAt(latLng)
+                }}
+              >
+                Create Midpoint
+              </button>
+            </div>
+          )}
+
           {(locationMessage || isLocating || isGpsConnecting) && (
             <div className="pointer-events-none absolute bottom-6 left-1/2 z-10 -translate-x-1/2 rounded-full bg-slate-900/90 px-4 py-2 text-xs font-medium text-white shadow-lg">
               {isGpsConnecting
@@ -1003,26 +995,16 @@ export default function MapView() {
               </div>
               <div className="mt-3 flex items-center justify-between text-xs text-slate-500">
                 <span>
-                  {nodeCount} control point{nodeCount === 1 ? '' : 's'}
+                  {nodeCount} midpoint{nodeCount === 1 ? '' : 's'}
                 </span>
-                {isCustomised && (
-                  <span className="text-slate-400">
-                    Gray = original fastest
-                  </span>
-                )}
               </div>
               <ul className="mt-3 space-y-1 border-t border-slate-100 pt-3 text-[11px] leading-snug text-slate-500">
                 <li>
-                  • Right-click a segment → splits it at that point (adds a
-                  control point)
+                  • Right-click the route → choose "Create Midpoint" to split
                 </li>
-                <li>
-                  • Drag a segment → only that segment reshapes, turns blue
-                </li>
-                <li>• Drag a control point → moves it, adjacent segments update</li>
-                <li>
-                  • Right-click a control point → deletes it (segments merge)
-                </li>
+                <li>• Drag a section → only that section changes</li>
+                <li>• Drag a midpoint → adjacent sections update</li>
+                <li>• Right-click a midpoint → delete it (sections merge)</li>
               </ul>
             </div>
           )}
