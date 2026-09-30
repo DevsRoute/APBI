@@ -70,6 +70,10 @@ export default function MapView() {
   const intermediariesRef = useRef([])
   const intermediaryMarkersRef = useRef(new Map())
   const rebuildVersionRef = useRef(0)
+  // Invisible OverlayView used to convert exact right-click pixel → lat/lng
+  // (Google Maps' own `rightclick` doesn't fire on the draggable route).
+  const projectorRef = useRef(null)
+  const contextMenuHandlerRef = useRef(null)
   const userMarkerRef = useRef(null)
   const userAccuracyCircleRef = useRef(null)
   const watchIdRef = useRef(null)
@@ -139,23 +143,41 @@ export default function MapView() {
 
         directionsServiceRef.current = new google.maps.DirectionsService()
 
-        // Right-click on any segment of the route → open a small "Create
-        // Midpoint" menu. Actual insert happens when the user clicks the menu.
-        map.addListener('rightclick', (e) => {
-          if (!e.latLng) return
-          const domEvent = e.domEvent
-          setContextMenu({
-            x: domEvent?.clientX ?? 0,
-            y: domEvent?.clientY ?? 0,
-            latLng: e.latLng,
-          })
-        })
+        // Overlay with no visible output — we only need it for its projection
+        // so we can turn the click pixel into a precise lat/lng.
+        const projector = new google.maps.OverlayView()
+        projector.onAdd = () => {}
+        projector.draw = () => {}
+        projector.onRemove = () => {}
+        projector.setMap(map)
+        projectorRef.current = projector
 
-        // Kill the browser's native context menu inside the map so our own
-        // right-click menu is the only thing that shows.
-        mapContainerRef.current?.addEventListener('contextmenu', (e) =>
-          e.preventDefault(),
-        )
+        const container = mapContainerRef.current
+        const onContextMenu = (e) => {
+          if (!container?.contains(e.target)) return
+          e.preventDefault()
+          const projection = projectorRef.current?.getProjection()
+          if (!projection) return
+          const rect = container.getBoundingClientRect()
+          const point = new google.maps.Point(
+            e.clientX - rect.left,
+            e.clientY - rect.top,
+          )
+          const latLng = projection.fromContainerPixelToLatLng(point)
+          if (!latLng) return
+          // Right-click on/near an existing midpoint → delete it.
+          // Anywhere else (on or off the route) → show "Create Midpoint" menu.
+          const nearId = findNearestMidpointWithinPixels(latLng, 15)
+          if (nearId) {
+            deleteIntermediary(nearId)
+            return
+          }
+          setContextMenu({ x: e.clientX, y: e.clientY, latLng })
+        }
+        // Listen on document so events fire even when the click lands on the
+        // polyline (which swallows container-level events on some map builds).
+        document.addEventListener('contextmenu', onContextMenu)
+        contextMenuHandlerRef.current = onContextMenu
 
         MAP_SITES.forEach((site) => {
           const marker = new google.maps.Marker({
@@ -216,6 +238,15 @@ export default function MapView() {
       cancelled = true
       clearSegments()
       clearIntermediaryMarkers()
+      if (contextMenuHandlerRef.current) {
+        document.removeEventListener(
+          'contextmenu',
+          contextMenuHandlerRef.current,
+        )
+        contextMenuHandlerRef.current = null
+      }
+      projectorRef.current?.setMap(null)
+      projectorRef.current = null
       if (watchIdRef.current != null) {
         navigator.geolocation.clearWatch(watchIdRef.current)
         watchIdRef.current = null
@@ -356,7 +387,9 @@ export default function MapView() {
       marker.addListener('dragend', (e) => {
         if (e.latLng) moveIntermediary(cp.id, e.latLng)
       })
-      marker.addListener('rightclick', () => deleteIntermediary(cp.id))
+      // Deletion is handled by the document-level contextmenu handler, which
+      // detects right-clicks near a midpoint. Attaching a marker-level
+      // rightclick here would race with that and delete twice.
       intermediaryMarkersRef.current.set(cp.id, marker)
     })
   }
@@ -539,6 +572,41 @@ export default function MapView() {
     if (!bounds.isEmpty()) map.fitBounds(bounds, 64)
 
     updateRouteSummary()
+  }
+
+  function findNearestMidpointWithinPixels(latLng, thresholdPx = 15) {
+    const google = window.google
+    if (!google || intermediariesRef.current.length === 0) return null
+    const spherical = google.maps.geometry.spherical
+    const zoom = mapRef.current?.getZoom() ?? 13
+    const thresholdMeters = thresholdPx * metersPerPixel(latLng.lat(), zoom)
+    let bestId = null
+    let bestDist = Infinity
+    intermediariesRef.current.forEach((cp) => {
+      const cpLL = new google.maps.LatLng(cp.position.lat, cp.position.lng)
+      const d = spherical.computeDistanceBetween(cpLL, latLng)
+      if (d < bestDist && d <= thresholdMeters) {
+        bestDist = d
+        bestId = cp.id
+      }
+    })
+    return bestId
+  }
+
+  function isNearAnySegment(latLng, thresholdPx = 20) {
+    const google = window.google
+    if (!google || segmentsRef.current.length === 0) return false
+    const spherical = google.maps.geometry.spherical
+    const zoom = mapRef.current?.getZoom() ?? 13
+    const thresholdMeters = thresholdPx * metersPerPixel(latLng.lat(), zoom)
+    for (const seg of segmentsRef.current) {
+      for (const pt of seg.overviewPath ?? []) {
+        if (spherical.computeDistanceBetween(pt, latLng) <= thresholdMeters) {
+          return true
+        }
+      }
+    }
+    return false
   }
 
   function findSegmentIndexForPoint(latLng) {
