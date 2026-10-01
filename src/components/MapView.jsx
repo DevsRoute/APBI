@@ -165,14 +165,24 @@ export default function MapView() {
           )
           const latLng = projection.fromContainerPixelToLatLng(point)
           if (!latLng) return
-          // Right-click on/near an existing midpoint → delete it.
+          // Right-click on/near a midpoint → show "Delete Midpoint" menu.
           // Anywhere else (on or off the route) → show "Create Midpoint" menu.
           const nearId = findNearestMidpointWithinPixels(latLng, 15)
           if (nearId) {
-            deleteIntermediary(nearId)
-            return
+            setContextMenu({
+              x: e.clientX,
+              y: e.clientY,
+              type: 'delete',
+              midpointId: nearId,
+            })
+          } else {
+            setContextMenu({
+              x: e.clientX,
+              y: e.clientY,
+              type: 'create',
+              latLng,
+            })
           }
-          setContextMenu({ x: e.clientX, y: e.clientY, latLng })
         }
         // Listen on document so events fire even when the click lands on the
         // polyline (which swallows container-level events on some map builds).
@@ -995,17 +1005,31 @@ export default function MapView() {
               style={{ left: contextMenu.x, top: contextMenu.y }}
               onClick={(e) => e.stopPropagation()}
             >
-              <button
-                type="button"
-                className="block w-full px-4 py-2 text-left text-slate-800 hover:bg-slate-100"
-                onClick={() => {
-                  const latLng = contextMenu.latLng
-                  setContextMenu(null)
-                  if (latLng) addIntermediaryAt(latLng)
-                }}
-              >
-                Create Midpoint
-              </button>
+              {contextMenu.type === 'delete' ? (
+                <button
+                  type="button"
+                  className="block w-full px-4 py-2 text-left text-red-600 hover:bg-red-50"
+                  onClick={() => {
+                    const id = contextMenu.midpointId
+                    setContextMenu(null)
+                    if (id) deleteIntermediary(id)
+                  }}
+                >
+                  Delete Midpoint
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="block w-full px-4 py-2 text-left text-slate-800 hover:bg-slate-100"
+                  onClick={() => {
+                    const latLng = contextMenu.latLng
+                    setContextMenu(null)
+                    if (latLng) addIntermediaryAt(latLng)
+                  }}
+                >
+                  Create Midpoint
+                </button>
+              )}
             </div>
           )}
 
