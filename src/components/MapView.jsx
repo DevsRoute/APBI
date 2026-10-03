@@ -16,20 +16,15 @@ const ORIGIN_COLOR = '#E53935'
 const DESTINATION_COLOR = '#E53935'
 const SITE_COLOR = '#7C7C8A'
 const SELECTED_COLOR = '#2563EB'
-const ORIGINAL_ROUTE_COLOR = '#9CA3AF'
-const CUSTOM_ROUTE_COLOR = '#2563EB'
+const ROUTE_COLOR = '#2563EB'
 const NODE_COLOR = '#2563EB'
 
-// Right-click-to-add-node distance threshold, in screen pixels. If the user
-// right-clicks farther than this from the current route we ignore it, since
-// the intent is "add a control point ON the route", not "detour via here".
-const ADD_NODE_PIXEL_THRESHOLD = 30
+const SEGMENT_HIT_PX = 25
+const MIDPOINT_HIT_PX = 20
 
-function pinSvg(color, scale = 1) {
-  const w = 32 * scale
-  const h = 44 * scale
+function pinSvg(color) {
   const svg = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 32 44">
+    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="44" viewBox="0 0 32 44">
       <path d="M16 0C7.163 0 0 7.163 0 16c0 11 16 28 16 28s16-17 16-28C32 7.163 24.837 0 16 0z" fill="${color}"/>
       <circle cx="16" cy="16" r="6" fill="#ffffff"/>
     </svg>`
@@ -37,8 +32,6 @@ function pinSvg(color, scale = 1) {
 }
 
 function nodeSvg(color = NODE_COLOR) {
-  // Solid white fill (r=10) is large enough to cover the small drag-handle
-  // dot that DirectionsRenderer draws at each waypoint when draggable=true.
   const svg = `
     <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22">
       <circle cx="11" cy="11" r="9" fill="#ffffff" stroke="${color}" stroke-width="2.5"/>
@@ -46,34 +39,51 @@ function nodeSvg(color = NODE_COLOR) {
   return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`
 }
 
-function toLatLng(loc) {
-  if (loc && typeof loc.lat === 'function') return loc
-  return new window.google.maps.LatLng(loc.lat, loc.lng)
-}
-
-// meters-per-pixel at a given lat/zoom — used to convert our pixel threshold
-// into a spherical distance for the on-route check.
 function metersPerPixel(lat, zoom) {
   return (156543.03392 * Math.cos((lat * Math.PI) / 180)) / Math.pow(2, zoom)
 }
 
+// Distance in meters from point p to segment a→b. Treats lat/lng as flat
+// near the segment — accurate enough at city scale, and far more reliable
+// than vertex-only distance (which misses clicks on long straight stretches).
+function pointToSegmentMeters(p, a, b, google) {
+  const spherical = google.maps.geometry.spherical
+  const dx = b.lat() - a.lat()
+  const dy = b.lng() - a.lng()
+  const len2 = dx * dx + dy * dy
+  if (len2 === 0) return spherical.computeDistanceBetween(p, a)
+  const t = Math.max(
+    0,
+    Math.min(
+      1,
+      ((p.lat() - a.lat()) * dx + (p.lng() - a.lng()) * dy) / len2,
+    ),
+  )
+  const closest = new google.maps.LatLng(a.lat() + t * dx, a.lng() + t * dy)
+  return spherical.computeDistanceBetween(p, closest)
+}
+
 export default function MapView() {
+  // --- refs ---
   const mapContainerRef = useRef(null)
   const mapRef = useRef(null)
-  const markersRef = useRef(new Map())
   const directionsServiceRef = useRef(null)
-  // One route split into N independently editable segments. Each has its own
-  // DirectionsRenderer so dragging one segment only reshapes that segment.
-  const segmentsRef = useRef([])
-  // Ordered list of user-added control points between origin and destination.
-  // Each `{ id, position }`. These are the only markers users see on the route.
-  const intermediariesRef = useRef([])
-  const intermediaryMarkersRef = useRef(new Map())
-  const rebuildVersionRef = useRef(0)
-  // Invisible OverlayView used to convert exact right-click pixel → lat/lng
-  // (Google Maps' own `rightclick` doesn't fire on the draggable route).
   const projectorRef = useRef(null)
   const contextMenuHandlerRef = useRef(null)
+
+  // Route data
+  const segmentsRef = useRef([])
+  const intermediariesRef = useRef([])
+  const intermediaryMarkersRef = useRef(new Map())
+  const siteMarkersRef = useRef(new Map())
+  const rebuildVersionRef = useRef(0)
+
+  // Mirrored state for one-time listeners
+  const originIdRef = useRef(null)
+  const destinationIdRef = useRef(null)
+  const siteByIdRef = useRef({})
+
+  // Location (browser geolocation + GPS)
   const userMarkerRef = useRef(null)
   const userAccuracyCircleRef = useRef(null)
   const watchIdRef = useRef(null)
@@ -83,13 +93,8 @@ export default function MapView() {
   const wasBrowserTrackingRef = useRef(false)
   const hasCenteredOnUserRef = useRef(false)
 
-  // Refs mirroring state so event handlers registered once at mount can read
-  // the latest values without being re-bound.
-  const originIdRef = useRef(null)
-  const destinationIdRef = useRef(null)
-  const siteByIdRef = useRef({})
-
-  const [status, setStatus] = useState('loading') // loading | ready | error
+  // --- state ---
+  const [status, setStatus] = useState('loading')
   const [errorMessage, setErrorMessage] = useState('')
   const [selectedId, setSelectedId] = useState(null)
   const [originId, setOriginId] = useState(
@@ -99,15 +104,13 @@ export default function MapView() {
     MAP_SITES.find((s) => s.role === 'destination')?.id ?? MAP_SITES.at(-1)?.id,
   )
   const [routeSummary, setRouteSummary] = useState(null)
-  const [nodeCount, setNodeCount] = useState(0)
-  const [isCustomised, setIsCustomised] = useState(false)
   const [locationMessage, setLocationMessage] = useState(null)
   const [isLocating, setIsLocating] = useState(false)
   const [isTracking, setIsTracking] = useState(false)
   const [isGpsConnected, setIsGpsConnected] = useState(false)
   const [isGpsConnecting, setIsGpsConnecting] = useState(false)
   const [hasAuthorizedGpsPort, setHasAuthorizedGpsPort] = useState(false)
-  const [contextMenu, setContextMenu] = useState(null) // { x, y, latLng } | null
+  const [contextMenu, setContextMenu] = useState(null)
 
   const siteById = useMemo(
     () => Object.fromEntries(MAP_SITES.map((s) => [s.id, s])),
@@ -124,6 +127,7 @@ export default function MapView() {
     siteByIdRef.current = siteById
   }, [siteById])
 
+  // --- map init (runs once) ---
   useEffect(() => {
     let cancelled = false
 
@@ -140,11 +144,11 @@ export default function MapView() {
           clickableIcons: false,
         })
         mapRef.current = map
-
         directionsServiceRef.current = new google.maps.DirectionsService()
 
-        // Overlay with no visible output — we only need it for its projection
-        // so we can turn the click pixel into a precise lat/lng.
+        // OverlayView exposes pixel→lat/lng projection for our DOM-level
+        // right-click handler. (Google's own `rightclick` doesn't fire on
+        // the draggable route polyline.)
         const projector = new google.maps.OverlayView()
         projector.onAdd = () => {}
         projector.draw = () => {}
@@ -165,9 +169,8 @@ export default function MapView() {
           )
           const latLng = projection.fromContainerPixelToLatLng(point)
           if (!latLng) return
-          // Right-click on/near a midpoint → show "Delete Midpoint" menu.
-          // Anywhere else (on or off the route) → show "Create Midpoint" menu.
-          const nearId = findNearestMidpointWithinPixels(latLng, 15)
+
+          const nearId = findNearestMidpoint(latLng, MIDPOINT_HIT_PX)
           if (nearId) {
             setContextMenu({
               x: e.clientX,
@@ -175,17 +178,20 @@ export default function MapView() {
               type: 'delete',
               midpointId: nearId,
             })
-          } else {
+            return
+          }
+          const segIdx = findSegmentNearPoint(latLng, SEGMENT_HIT_PX)
+          if (segIdx >= 0) {
             setContextMenu({
               x: e.clientX,
               y: e.clientY,
               type: 'create',
               latLng,
+              segmentIdx: segIdx,
+              segmentModified: !!segmentsRef.current[segIdx]?.modified,
             })
           }
         }
-        // Listen on document so events fire even when the click lands on the
-        // polyline (which swallows container-level events on some map builds).
         document.addEventListener('contextmenu', onContextMenu)
         contextMenuHandlerRef.current = onContextMenu
 
@@ -201,9 +207,10 @@ export default function MapView() {
             },
           })
           marker.addListener('click', () => setSelectedId(site.id))
-          markersRef.current.set(site.id, marker)
+          siteMarkersRef.current.set(site.id, marker)
         })
 
+        // --- Locate Me button ---
         const locateBtn = document.createElement('button')
         locateBtn.type = 'button'
         locateBtn.title = 'Show my location'
@@ -216,6 +223,7 @@ export default function MapView() {
         locateBtnRef.current = locateBtn
         map.controls[google.maps.ControlPosition.RIGHT_BOTTOM].push(locateBtn)
 
+        // --- GPS button (Chrome/Edge only) ---
         if (isWebSerialSupported()) {
           const gpsBtn = document.createElement('button')
           gpsBtn.type = 'button'
@@ -273,15 +281,14 @@ export default function MapView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // --- button visual state ---
   useEffect(() => {
     const btn = locateBtnRef.current
     if (!btn) return
     const stroke = isTracking ? '#1A73E8' : '#5f6368'
-    btn.title = isTracking ? 'Stop live tracking' : 'Show my location'
-    btn.setAttribute(
-      'aria-label',
-      isTracking ? 'Stop live tracking' : 'Show my location',
-    )
+    const label = isTracking ? 'Stop live tracking' : 'Show my location'
+    btn.title = label
+    btn.setAttribute('aria-label', label)
     btn.innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="${stroke}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"${isTracking ? ` fill="${stroke}"` : ''}/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>`
   }, [isTracking])
 
@@ -301,6 +308,7 @@ export default function MapView() {
     btn.innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="${stroke}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 0 1 10 10"/><path d="M12 6a6 6 0 0 1 6 6"/><circle cx="12" cy="12" r="2" fill="${stroke}"/></svg>`
   }, [isGpsConnected, isGpsConnecting, hasAuthorizedGpsPort])
 
+  // --- dismiss context menu on outside click / Escape ---
   useEffect(() => {
     if (!contextMenu) return
     const close = () => setContextMenu(null)
@@ -315,12 +323,12 @@ export default function MapView() {
     }
   }, [contextMenu])
 
-  // Re-colour the pins whenever selection or endpoints change.
+  // --- recolour site pins on selection / endpoint change ---
   useEffect(() => {
     if (status !== 'ready') return
     const google = window.google
     MAP_SITES.forEach((site) => {
-      const marker = markersRef.current.get(site.id)
+      const marker = siteMarkersRef.current.get(site.id)
       if (!marker) return
       marker.setIcon({
         url: pinSvg(colorForSite(site, { selectedId, originId, destinationId })),
@@ -330,9 +338,7 @@ export default function MapView() {
     })
   }, [status, selectedId, originId, destinationId])
 
-  // When origin/destination change, discard any existing intermediary points
-  // (they wouldn't make sense on the new route), rebuild segments, and refresh
-  // the gray original-fastest reference route.
+  // --- rebuild route when endpoints change ---
   useEffect(() => {
     if (status !== 'ready') return
     const origin = siteById[originId]
@@ -342,6 +348,10 @@ export default function MapView() {
     rebuildAllSegments()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, originId, destinationId, siteById])
+
+  // ============================================================
+  //                      ROUTE / SEGMENTS
+  // ============================================================
 
   function pointsList() {
     const originPos = siteByIdRef.current[originIdRef.current]?.position
@@ -356,7 +366,7 @@ export default function MapView() {
 
   function clearSegments() {
     segmentsRef.current.forEach((seg) => {
-      if (seg.listener) seg.listener.remove()
+      seg.listener?.remove()
       seg.renderer?.setMap(null)
     })
     segmentsRef.current = []
@@ -365,15 +375,6 @@ export default function MapView() {
   function clearIntermediaryMarkers() {
     intermediaryMarkersRef.current.forEach((m) => m.setMap(null))
     intermediaryMarkersRef.current.clear()
-  }
-
-  function makeNodeIcon(color) {
-    const google = window.google
-    return {
-      url: nodeSvg(color),
-      scaledSize: new google.maps.Size(22, 22),
-      anchor: new google.maps.Point(11, 11),
-    }
   }
 
   function rebuildIntermediaryMarkers() {
@@ -387,39 +388,24 @@ export default function MapView() {
         map,
         draggable: true,
         crossOnDrag: false,
-        // optimized: false forces per-marker DOM so zIndex wins over the
-        // small drag handles Google draws on draggable DirectionsRenderers.
         optimized: false,
-        icon: makeNodeIcon(NODE_COLOR),
-        title: 'Drag to move · Right-click to delete',
+        icon: {
+          url: nodeSvg(NODE_COLOR),
+          scaledSize: new google.maps.Size(22, 22),
+          anchor: new google.maps.Point(11, 11),
+        },
+        title: 'Drag to move · Right-click for options',
         zIndex: 999999,
       })
       marker.addListener('dragend', (e) => {
-        if (e.latLng) moveIntermediary(cp.id, e.latLng)
+        if (e.latLng) moveMidpoint(cp.id, e.latLng)
       })
-      // Deletion is handled by the document-level contextmenu handler, which
-      // detects right-clicks near a midpoint. Attaching a marker-level
-      // rightclick here would race with that and delete twice.
       intermediaryMarkersRef.current.set(cp.id, marker)
     })
   }
 
-  function createSegmentShell(startPos, endPos) {
-    return {
-      startPos,
-      endPos,
-      renderer: null,
-      listener: null,
-      shapingWaypoints: [],
-      modified: false,
-      isProgrammatic: false,
-      overviewPath: [],
-    }
-  }
-
-  // Tears down segment's renderer (if any) and reloads it with the given
-  // shape + colour. Used both for initial gray segments and for repainting
-  // blue when the user drags.
+  // Tears down the segment's renderer and reloads it with the given shape.
+  // Used for both initial loads and reshapes after a drag.
   function loadSegmentRoute(segIdx, shapingWaypoints, modified) {
     const google = window.google
     const map = mapRef.current
@@ -427,11 +413,9 @@ export default function MapView() {
     const seg = segmentsRef.current[segIdx]
     if (!google || !map || !service || !seg) return Promise.resolve()
 
-    if (seg.listener) {
-      seg.listener.remove()
-      seg.listener = null
-    }
-    if (seg.renderer) seg.renderer.setMap(null)
+    seg.listener?.remove()
+    seg.listener = null
+    seg.renderer?.setMap(null)
 
     seg.renderer = new google.maps.DirectionsRenderer({
       map,
@@ -439,7 +423,7 @@ export default function MapView() {
       suppressMarkers: true,
       preserveViewport: true,
       polylineOptions: {
-        strokeColor: CUSTOM_ROUTE_COLOR,
+        strokeColor: ROUTE_COLOR,
         strokeOpacity: 0.95,
         strokeWeight: 6,
       },
@@ -461,7 +445,6 @@ export default function MapView() {
           optimizeWaypoints: false,
         },
         (result, statusCode) => {
-          // Stale response: a newer load replaced our renderer.
           if (myRenderer !== seg.renderer) {
             resolve()
             return
@@ -475,7 +458,7 @@ export default function MapView() {
           seg.shapingWaypoints = shapingWaypoints
           seg.overviewPath = result.routes?.[0]?.overview_path ?? []
           seg.listener = seg.renderer.addListener('directions_changed', () =>
-            handleSegmentChanged(segIdx),
+            onSegmentDragged(segIdx),
           )
           setTimeout(() => {
             seg.isProgrammatic = false
@@ -484,6 +467,21 @@ export default function MapView() {
         },
       )
     })
+  }
+
+  function onSegmentDragged(segIdx) {
+    const seg = segmentsRef.current[segIdx]
+    if (!seg || seg.isProgrammatic) return
+    const result = seg.renderer.getDirections()
+    if (!result?.routes?.[0]) return
+    const newShaping = (result.request?.waypoints ?? []).map((w) => {
+      const loc = w.location
+      return typeof loc.lat === 'function'
+        ? { lat: loc.lat(), lng: loc.lng() }
+        : loc
+    })
+    if (seg.modified && shapesEqual(seg.shapingWaypoints, newShaping)) return
+    loadSegmentRoute(segIdx, newShaping, true).then(updateRouteSummary)
   }
 
   function shapesEqual(a, b) {
@@ -495,96 +493,83 @@ export default function MapView() {
     )
   }
 
-  function handleSegmentChanged(segIdx) {
-    const seg = segmentsRef.current[segIdx]
-    if (!seg || seg.isProgrammatic) return
-    const result = seg.renderer.getDirections()
-    if (!result?.routes?.[0]) return
-    const raw = result.request?.waypoints ?? []
-    const newShaping = raw.map((w) => {
-      const loc = w.location
-      return typeof loc.lat === 'function'
-        ? { lat: loc.lat(), lng: loc.lng() }
-        : loc
-    })
-    if (seg.modified && shapesEqual(seg.shapingWaypoints, newShaping)) return
-    loadSegmentRoute(segIdx, newShaping, true).then(updateRouteSummary)
-  }
+  async function rebuildAllSegments() {
+    const google = window.google
+    const map = mapRef.current
+    if (!google || !map) return
+    const pts = pointsList()
+    if (pts.length < 2) return
 
-  function formatDistance(meters) {
-    const mi = meters / 1609.344
-    if (mi >= 10) return `${mi.toFixed(0)} mi`
-    return `${mi.toFixed(1)} mi`
-  }
+    const version = ++rebuildVersionRef.current
+    clearSegments()
+    segmentsRef.current = pts.slice(0, -1).map((start, i) => ({
+      startPos: start,
+      endPos: pts[i + 1],
+      renderer: null,
+      listener: null,
+      shapingWaypoints: [],
+      modified: false,
+      isProgrammatic: false,
+      overviewPath: [],
+    }))
+    rebuildIntermediaryMarkers()
 
-  function formatDuration(seconds) {
-    if (seconds < 60) return `${Math.round(seconds)} s`
-    const mins = Math.round(seconds / 60)
-    if (mins < 60) return `${mins} min`
-    const h = Math.floor(mins / 60)
-    const rest = mins % 60
-    return rest === 0 ? `${h}h` : `${h}h ${rest}m`
+    await Promise.all(
+      segmentsRef.current.map((_, i) => loadSegmentRoute(i, [], false)),
+    )
+    if (version !== rebuildVersionRef.current) return
+
+    const bounds = new google.maps.LatLngBounds()
+    segmentsRef.current.forEach((seg) =>
+      seg.overviewPath?.forEach((p) => bounds.extend(p)),
+    )
+    if (!bounds.isEmpty()) map.fitBounds(bounds, 64)
+
+    updateRouteSummary()
   }
 
   function updateRouteSummary() {
     let totalMeters = 0
     let totalSeconds = 0
-    let hasAny = false
+    let any = false
     segmentsRef.current.forEach((seg) => {
       const leg = seg.renderer?.getDirections()?.routes?.[0]?.legs?.[0]
       if (leg?.distance?.value != null) {
         totalMeters += leg.distance.value
         totalSeconds += leg.duration?.value ?? 0
-        hasAny = true
+        any = true
       }
     })
-    const anyModified = segmentsRef.current.some((s) => s.modified)
-    setIsCustomised(anyModified)
-    setNodeCount(intermediariesRef.current.length)
-    if (!hasAny) {
+    if (!any) {
       setRouteSummary(null)
       return
     }
     setRouteSummary({
       distance: formatDistance(totalMeters),
       duration: formatDuration(totalSeconds),
-      summary: anyModified ? 'Custom (per-segment)' : 'Fastest path',
-      waypointCount: intermediariesRef.current.length,
+      midpoints: intermediariesRef.current.length,
     })
   }
 
-  async function rebuildAllSegments() {
-    const google = window.google
-    const map = mapRef.current
-    if (!google || !map) return
-
-    const pts = pointsList()
-    if (pts.length < 2) return
-
-    const version = ++rebuildVersionRef.current
-    clearSegments()
-
-    segmentsRef.current = pts
-      .slice(0, -1)
-      .map((start, i) => createSegmentShell(start, pts[i + 1]))
-    rebuildIntermediaryMarkers()
-
-    await Promise.all(
-      segmentsRef.current.map((_, i) => loadSegmentRoute(i, [], false)),
-    )
-
-    if (version !== rebuildVersionRef.current) return
-
-    const bounds = new google.maps.LatLngBounds()
-    segmentsRef.current.forEach((seg) => {
-      seg.overviewPath?.forEach((p) => bounds.extend(p))
-    })
-    if (!bounds.isEmpty()) map.fitBounds(bounds, 64)
-
-    updateRouteSummary()
+  function formatDistance(m) {
+    const mi = m / 1609.344
+    return mi >= 10 ? `${mi.toFixed(0)} mi` : `${mi.toFixed(1)} mi`
   }
 
-  function findNearestMidpointWithinPixels(latLng, thresholdPx = 15) {
+  function formatDuration(s) {
+    if (s < 60) return `${Math.round(s)} s`
+    const mins = Math.round(s / 60)
+    if (mins < 60) return `${mins} min`
+    const h = Math.floor(mins / 60)
+    const rest = mins % 60
+    return rest === 0 ? `${h}h` : `${h}h ${rest}m`
+  }
+
+  // ============================================================
+  //                         MIDPOINTS
+  // ============================================================
+
+  function findNearestMidpoint(latLng, thresholdPx) {
     const google = window.google
     if (!google || intermediariesRef.current.length === 0) return null
     const spherical = google.maps.geometry.spherical
@@ -603,64 +588,45 @@ export default function MapView() {
     return bestId
   }
 
-  function isNearAnySegment(latLng, thresholdPx = 20) {
-    const google = window.google
-    if (!google || segmentsRef.current.length === 0) return false
-    const spherical = google.maps.geometry.spherical
-    const zoom = mapRef.current?.getZoom() ?? 13
-    const thresholdMeters = thresholdPx * metersPerPixel(latLng.lat(), zoom)
-    for (const seg of segmentsRef.current) {
-      for (const pt of seg.overviewPath ?? []) {
-        if (spherical.computeDistanceBetween(pt, latLng) <= thresholdMeters) {
-          return true
-        }
-      }
-    }
-    return false
-  }
-
-  function findSegmentIndexForPoint(latLng) {
+  function findSegmentNearPoint(latLng, thresholdPx) {
     const google = window.google
     if (!google || segmentsRef.current.length === 0) return -1
-    const spherical = google.maps.geometry.spherical
-
-    // Return whichever segment is closest — no threshold. Right-clicking
-    // anywhere on (or near) the route inserts a split into the nearest one.
-    let bestIdx = 0
+    const zoom = mapRef.current?.getZoom() ?? 13
+    const thresholdMeters = thresholdPx * metersPerPixel(latLng.lat(), zoom)
+    let bestIdx = -1
     let bestDist = Infinity
     segmentsRef.current.forEach((seg, i) => {
-      seg.overviewPath?.forEach((pt) => {
-        const d = spherical.computeDistanceBetween(pt, latLng)
+      const path = seg.overviewPath ?? []
+      for (let j = 0; j < path.length - 1; j++) {
+        const d = pointToSegmentMeters(latLng, path[j], path[j + 1], google)
         if (d < bestDist) {
           bestDist = d
           bestIdx = i
         }
-      })
+      }
     })
-    return bestIdx
+    return bestDist <= thresholdMeters ? bestIdx : -1
   }
 
-  function addIntermediaryAt(latLng) {
-    const segIdx = findSegmentIndexForPoint(latLng)
-    if (segIdx < 0) return
+  function addMidpoint(latLng, segIdx) {
+    if (segIdx == null || segIdx < 0) return
     const id = `cp_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
-    const pos = { lat: latLng.lat(), lng: latLng.lng() }
     intermediariesRef.current = [
       ...intermediariesRef.current.slice(0, segIdx),
-      { id, position: pos },
+      { id, position: { lat: latLng.lat(), lng: latLng.lng() } },
       ...intermediariesRef.current.slice(segIdx),
     ]
     rebuildAllSegments()
   }
 
-  function deleteIntermediary(id) {
+  function deleteMidpoint(id) {
     intermediariesRef.current = intermediariesRef.current.filter(
       (cp) => cp.id !== id,
     )
     rebuildAllSegments()
   }
 
-  function moveIntermediary(id, latLng) {
+  function moveMidpoint(id, latLng) {
     intermediariesRef.current = intermediariesRef.current.map((cp) =>
       cp.id === id
         ? { ...cp, position: { lat: latLng.lat(), lng: latLng.lng() } }
@@ -668,6 +634,21 @@ export default function MapView() {
     )
     rebuildAllSegments()
   }
+
+  function removeDetour(segIdx) {
+    const seg = segmentsRef.current[segIdx]
+    if (!seg || !seg.modified) return
+    loadSegmentRoute(segIdx, [], false).then(updateRouteSummary)
+  }
+
+  function handleReset() {
+    intermediariesRef.current = []
+    rebuildAllSegments()
+  }
+
+  // ============================================================
+  //                 LOCATION (browser + USB GPS)
+  // ============================================================
 
   function stopTracking() {
     if (watchIdRef.current != null) {
@@ -689,7 +670,6 @@ export default function MapView() {
     const map = mapRef.current
     const google = window.google
     if (!map || !google) return
-
     const pos = { lat: latitude, lng: longitude }
 
     if (userMarkerRef.current) {
@@ -728,8 +708,8 @@ export default function MapView() {
       })
     }
 
-    // Only auto-center on the first fix so the map doesn't yank away while the
-    // user is panning around during a live-tracking session.
+    // Only auto-center on the first fix so the map doesn't yank away while
+    // the user pans around during a live-tracking session.
     if (!hasCenteredOnUserRef.current) {
       map.panTo(pos)
       if ((map.getZoom() ?? 0) < 14) map.setZoom(15)
@@ -742,12 +722,7 @@ export default function MapView() {
   function handleLocationUpdate(position) {
     setIsLocating(false)
     const { latitude, longitude, accuracy } = position.coords
-    renderPosition({
-      latitude,
-      longitude,
-      accuracy,
-      sourceLabel: 'Tracking',
-    })
+    renderPosition({ latitude, longitude, accuracy, sourceLabel: 'Tracking' })
   }
 
   function handleLocationError(err) {
@@ -771,17 +746,14 @@ export default function MapView() {
       setTimeout(() => setLocationMessage(null), 2000)
       return
     }
-
     if (!navigator.geolocation) {
       setLocationMessage('Geolocation is not supported by this browser.')
       return
     }
-
     setIsLocating(true)
     setIsTracking(true)
     setLocationMessage(null)
     hasCenteredOnUserRef.current = false
-
     watchIdRef.current = navigator.geolocation.watchPosition(
       handleLocationUpdate,
       handleLocationError,
@@ -813,9 +785,6 @@ export default function MapView() {
       gpsHandleRef.current = null
     }
     setIsGpsConnected(false)
-
-    // If browser tracking was paused when GPS took over, resume it now so the
-    // dot doesn't just freeze in place.
     if (wasBrowserTrackingRef.current && watchIdRef.current == null) {
       wasBrowserTrackingRef.current = false
       setIsTracking(true)
@@ -826,7 +795,6 @@ export default function MapView() {
         { enableHighAccuracy: true, timeout: 10000, maximumAge: 2000 },
       )
     }
-
     if (!silent) {
       setLocationMessage('GPS disconnected')
       setTimeout(() => setLocationMessage(null), 2000)
@@ -838,17 +806,14 @@ export default function MapView() {
       await disconnectGps()
       return
     }
-
     if (!isWebSerialSupported()) {
       setLocationMessage(
         'USB GPS requires Chrome or Edge on desktop (Web Serial API).',
       )
       return
     }
-
     setIsGpsConnecting(true)
     setLocationMessage('Connecting GPS…')
-
     try {
       const port = (await getAuthorizedPort()) ?? (await requestPort())
       const handle = await openGpsStream(port, {
@@ -859,16 +824,12 @@ export default function MapView() {
       setIsGpsConnected(true)
       setHasAuthorizedGpsPort(true)
       hasCenteredOnUserRef.current = false
-
-      // GPS is authoritative — pause browser tracking while it's connected so
-      // the marker doesn't jitter between two sources.
       if (watchIdRef.current != null) {
         wasBrowserTrackingRef.current = true
         navigator.geolocation.clearWatch(watchIdRef.current)
         watchIdRef.current = null
         setIsTracking(false)
       }
-
       setLocationMessage('GPS connected · waiting for fix…')
     } catch (err) {
       const msg =
@@ -881,10 +842,9 @@ export default function MapView() {
     }
   }
 
-  function handleReset() {
-    intermediariesRef.current = []
-    rebuildAllSegments()
-  }
+  // ============================================================
+  //                           RENDER
+  // ============================================================
 
   return (
     <div className="flex h-screen w-full flex-col overflow-hidden bg-slate-50">
@@ -903,8 +863,8 @@ export default function MapView() {
             </h1>
           </div>
           <p className="mt-1 text-xs text-slate-500">
-            Right-click the route and choose "Create Midpoint" to split it.
-            Each section can then be dragged independently.
+            Right-click the route for options · drag a section to detour ·
+            drag a midpoint to move it.
           </p>
         </div>
         <button
@@ -1012,23 +972,39 @@ export default function MapView() {
                   onClick={() => {
                     const id = contextMenu.midpointId
                     setContextMenu(null)
-                    if (id) deleteIntermediary(id)
+                    if (id) deleteMidpoint(id)
                   }}
                 >
                   Delete Midpoint
                 </button>
               ) : (
-                <button
-                  type="button"
-                  className="block w-full px-4 py-2 text-left text-slate-800 hover:bg-slate-100"
-                  onClick={() => {
-                    const latLng = contextMenu.latLng
-                    setContextMenu(null)
-                    if (latLng) addIntermediaryAt(latLng)
-                  }}
-                >
-                  Create Midpoint
-                </button>
+                <>
+                  <button
+                    type="button"
+                    className="block w-full px-4 py-2 text-left text-slate-800 hover:bg-slate-100"
+                    onClick={() => {
+                      const latLng = contextMenu.latLng
+                      const segIdx = contextMenu.segmentIdx
+                      setContextMenu(null)
+                      if (latLng) addMidpoint(latLng, segIdx)
+                    }}
+                  >
+                    Create Midpoint
+                  </button>
+                  {contextMenu.segmentModified && (
+                    <button
+                      type="button"
+                      className="block w-full px-4 py-2 text-left text-slate-800 hover:bg-slate-100"
+                      onClick={() => {
+                        const segIdx = contextMenu.segmentIdx
+                        setContextMenu(null)
+                        if (segIdx != null) removeDetour(segIdx)
+                      }}
+                    >
+                      Remove Detour
+                    </button>
+                  )}
+                </>
               )}
             </div>
           )}
@@ -1066,37 +1042,19 @@ export default function MapView() {
 
           {status === 'ready' && routeSummary && (
             <div className="absolute left-4 top-4 max-w-sm rounded-lg bg-white/95 p-4 shadow-lg ring-1 ring-slate-200 backdrop-blur">
-              <div className="flex items-center gap-2">
-                <span
-                  className={[
-                    'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium',
-                    isCustomised
-                      ? 'bg-blue-100 text-blue-700'
-                      : 'bg-slate-100 text-slate-700',
-                  ].join(' ')}
-                >
-                  {isCustomised ? 'Custom path' : 'Fastest path'}
-                </span>
-                <span className="text-xs text-slate-500">
-                  {routeSummary.summary}
-                </span>
-              </div>
-              <div className="mt-2 grid grid-cols-2 gap-3 text-sm">
+              <div className="grid grid-cols-2 gap-3 text-sm">
                 <Stat label="Distance" value={routeSummary.distance} />
                 <Stat label="Duration" value={routeSummary.duration} />
               </div>
-              <div className="mt-3 flex items-center justify-between text-xs text-slate-500">
-                <span>
-                  {nodeCount} midpoint{nodeCount === 1 ? '' : 's'}
-                </span>
+              <div className="mt-3 text-xs text-slate-500">
+                {routeSummary.midpoints} midpoint
+                {routeSummary.midpoints === 1 ? '' : 's'}
               </div>
               <ul className="mt-3 space-y-1 border-t border-slate-100 pt-3 text-[11px] leading-snug text-slate-500">
-                <li>
-                  • Right-click the route → choose "Create Midpoint" to split
-                </li>
-                <li>• Drag a section → only that section changes</li>
-                <li>• Drag a midpoint → adjacent sections update</li>
-                <li>• Right-click a midpoint → delete it (sections merge)</li>
+                <li>• Right-click the route → Create Midpoint</li>
+                <li>• Drag a section → detour that section</li>
+                <li>• Right-click a detoured section → Remove Detour</li>
+                <li>• Right-click a midpoint → Delete Midpoint</li>
               </ul>
             </div>
           )}
