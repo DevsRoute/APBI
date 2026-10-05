@@ -1,6 +1,4 @@
-// Web Serial connection manager for USB-C GNSS receivers (NaviSys GR-U01C
-// and similar u-blox-based devices). Streams NMEA, parses GGA + RMC, and
-// emits normalized position fixes.
+// Web Serial driver for USB GNSS receivers. Reads NMEA and emits position fixes.
 
 import { isGGA, isRMC, parseGGA, parseRMC } from './nmea'
 
@@ -10,16 +8,14 @@ export function isWebSerialSupported() {
   return typeof navigator !== 'undefined' && 'serial' in navigator
 }
 
-// Returns the first port the user has already authorized (if any). Lets us
-// skip the port picker on repeat visits.
+// First previously authorized port, if any — lets us skip the picker.
 export async function getAuthorizedPort() {
   if (!isWebSerialSupported()) return null
   const ports = await navigator.serial.getPorts()
   return ports[0] ?? null
 }
 
-// Must be called from a user gesture (click). Shows the browser's port
-// chooser and returns the selected port.
+// Must be called from a user gesture (click). Shows the browser's port picker.
 export async function requestPort() {
   if (!isWebSerialSupported()) {
     throw new Error('Web Serial is not supported by this browser.')
@@ -27,8 +23,8 @@ export async function requestPort() {
   return navigator.serial.requestPort()
 }
 
-// Open the port, read NMEA, and call onFix() for each valid position.
-// Returns a handle whose disconnect() cleans up the stream + port.
+// Opens the port and streams NMEA, calling onFix for each valid position.
+// Returns a handle with disconnect() that cleans up the stream and port.
 export async function openGpsStream(port, { onFix, onError, baudRate } = {}) {
   await port.open({ baudRate: baudRate ?? DEFAULT_BAUD_RATE })
 
@@ -69,8 +65,6 @@ export async function openGpsStream(port, { onFix, onError, baudRate } = {}) {
             onFix?.({
               latitude: gga.latitude,
               longitude: gga.longitude,
-              // HDOP → meters is a rough approximation (u-blox typical
-              // horizontal error ≈ HDOP × 3m for a 2D fix).
               accuracy: gga.hdop != null ? gga.hdop * 3 : 10,
               altitude: gga.altitude,
               satellites: gga.satellites,

@@ -1,6 +1,4 @@
-// NMEA-0183 parser for u-blox / generic GNSS receivers.
-// Supports GGA (position + fix quality) and RMC (speed + heading).
-// Talker IDs handled: GP, GN, GL, GA (GPS, multi-GNSS, GLONASS, Galileo).
+// NMEA-0183 parser. Handles GGA and RMC with GP/GN/GL/GA talker IDs.
 
 function verifyChecksum(sentence) {
   const star = sentence.lastIndexOf('*')
@@ -12,8 +10,7 @@ function verifyChecksum(sentence) {
   return sum.toString(16).padStart(2, '0').toUpperCase() === expected
 }
 
-// NMEA lat = "DDMM.mmmm", lon = "DDDMM.mmmm". Minutes are always the two
-// digits before the decimal + everything after; the rest is degrees.
+// Convert DDMM.mmmm / DDDMM.mmmm to decimal degrees.
 function toDecimal(raw, hemisphere) {
   if (!raw) return null
   const dot = raw.indexOf('.')

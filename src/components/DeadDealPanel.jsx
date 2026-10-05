@@ -10,8 +10,6 @@ const reasonRows = [
   { name: 'Other',       count: 58, pct: 32.2, color: '#4B4B4B' },
 ]
 
-// Donut: clockwise Economics → Operations → Other → Competition.
-// Arc sizes tuned to Figma visual share (green ~1 o'clock→3 o'clock). Labels keep real counts.
 const donutData = [
   { name: 'Economics',   count: 45, color: '#36B9C1' },
   { name: 'Operations',  count: 30, color: '#1F7700' },
@@ -19,7 +17,7 @@ const donutData = [
   { name: 'Competition', count: 57, color: '#FFE6AF' },
 ]
 
-// Reason x Status matrix. Each row = [Economics, Competition, Operations, Other]
+// Columns: Economics, Competition, Operations, Other.
 const matrixRows = [
   { name: 'New',          cells: [{ n: 12, p: 30.0 }, { n: 10, p: 25.0 }, { n: 14, p: 10.0 }, { n: 4,  p: 10.0 }] },
   { name: 'Promising',    cells: [{ n: 10, p: 25.0 }, { n: 10, p: 25.0 }, { n: 3,  p: 20.0 }, { n: 8,  p: 20.0 }] },
@@ -30,7 +28,6 @@ const matrixRows = [
   { name: 'Exec Lease',   cells: [{ n: 3,  p: 7.5  }, { n: 5,  p: 12.5 }, { n: 7,  p: 17.5 }, { n: 10, p: 25.0 }] },
 ]
 
-// Figma Normalize view: most rows 30/80/12/12; REC Pack keeps tiny Operations = 2
 const normalizedBarRows = matrixRows.map((row) => ({
   name: row.name,
   cells:
@@ -39,9 +36,7 @@ const normalizedBarRows = matrixRows.map((row) => ({
       : [{ n: 30 }, { n: 80 }, { n: 12 }, { n: 12 }],
 }))
 
-// Stacked bar L→R: green → AP very matte orange (#FFC268 + 20% black) → blue → black
 const REASON_COLORS = ['#349A7A', '#CC9B53', '#36B9C1', '#585858']
-// Figma: longest absolute bar (New = 40) is 424×16
 const BAR_MAX_W = 424
 const BAR_MAX_TOTAL = Math.max(
   ...matrixRows.map((row) => row.cells.reduce((sum, c) => sum + c.n, 0)),
@@ -57,7 +52,6 @@ function Donut() {
         filter: 'drop-shadow(0 2px 4px rgba(0, 0, 0, 0.2))',
       }}
     >
-      {/* Figma: solid white center disc behind the ring hole */}
       <div
         aria-hidden
         className="absolute rounded-full"
@@ -73,7 +67,6 @@ function Donut() {
           cy={84}
           innerRadius={53}
           outerRadius={79}
-          // 135° = 10:30 — Economics (25%) sits centered on 12 o'clock like Figma
           startAngle={155}
           endAngle={-210}
           paddingAngle={0}
@@ -89,7 +82,6 @@ function Donut() {
         </Pie>
       </PieChart>
 
-      {/* Center label */}
       <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
         <span className="text-[24px] font-medium leading-none text-ap-text pt-[10px] pl-[12px]">180</span>
         <span className="mt-[8px] text-[12px] font-medium leading-none text-ap-text pl-[8px]">Dead Deals</span>
@@ -117,10 +109,6 @@ function DonutLabel({ style, name, count, pct, align = 'left' }) {
   )
 }
 
-// Above-bar layout constants.
-// D: minimum horizontal gap between two above-bar numbers (client rule).
-// CHAR_W: rough px-per-char at 11px extrabold — used to estimate label width.
-// INSIDE_PAD: breathing room required for a label to sit inside a segment.
 const ABOVE_LABEL_D = 10
 const LABEL_CHAR_W = 6.5
 const LABEL_INSIDE_PAD = 6
@@ -146,8 +134,7 @@ function StackedBar({ cells, normalize, percentage }) {
     })
     .filter((s) => s.n > 0)
 
-  // Pixel widths (absolute scale or normalize share of track). Last segment
-  // in non-normalize mode absorbs any rounding slack so segments sum to trackW.
+  // Last segment absorbs rounding slack so widths sum to trackW.
   let used = 0
   const raw2 = raw.map((s, idx) => {
     let widthPx
@@ -169,13 +156,8 @@ function StackedBar({ cells, normalize, percentage }) {
     return { ...s, startPx, centerPx: startPx + s.widthPx / 2 }
   })
 
-  // Cascading inside/above decision per client rules:
-  //  - Try to place each label INSIDE its segment (bold, white).
-  //  - If it doesn't fit, or if the PREVIOUS above-label crosses the current
-  //    segment's center line (extends past centerPx before observing D),
-  //    force ABOVE and colour-match to the segment.
-  //  - Above-labels must be ≥ D apart, so a label may be shifted right of its
-  //    ideal centered position to preserve that gap.
+  // Try to fit label inside its segment; otherwise push it above and keep
+  // above-labels at least ABOVE_LABEL_D apart.
   let prevAboveRight = -Infinity
   const positioned = withPositions.map((s) => {
     const labelW = measureLabelWidth(s.label)
@@ -256,7 +238,6 @@ export default function DeadDealPanel() {
         </p>
       </header>
 
-      {/* Sites Filtered + Dead Deals pink callout */}
       <div className="flex flex-col gap-[10px] pt-[30px] pb-[10px]">
         <div className="flex items-baseline gap-3 pl-[20px]">
           <span className="text-[18px] font-medium leading-none text-ap-text">
@@ -279,9 +260,7 @@ export default function DeadDealPanel() {
         </div>
       </div>
 
-      {/* Block 1: Reason table + Donut */}
       <div className="flex gap-[11px]">
-        {/* Left card */}
         <div className="flex w-[311px] flex-col gap-[12px] overflow-hidden bg-[#DCDCDC]">
           <div className="grid h-[40px] w-full shrink-0 grid-cols-[140px_1fr] items-center bg-ap-dark-gray pl-[14px] pr-[20px] text-[14px] font-bold leading-none text-white">
             <span>Reason</span>
@@ -297,9 +276,7 @@ export default function DeadDealPanel() {
               <span className="pl-[8px] font-normal">{`(${row.pct.toFixed(1)}%)`}</span>
             </div>
           ))}
-          {/* Divider */}
           <div className="mx-[14px] border-t border-[#4B4B4B]" />
-          {/* Total */}
           <div className="grid h-[35px] w-[311px] grid-cols-[140px_50px_1fr] items-center pl-[14px] pr-[20px] text-[14px] leading-none text-ap-text">
             <span className="font-semibold">Dead Deals</span>
             <span className="text-right font-extrabold pr-[10px]">180</span>
@@ -307,18 +284,15 @@ export default function DeadDealPanel() {
           </div>
         </div>
 
-        {/* Right card: donut */}
         <div className="relative h-[320px] w-[280px] bg-[#DCDCDC]">
           <span className="absolute right-[12px] top-[12px] text-[14px] font-medium leading-none text-ap-text">
             sites
           </span>
 
-          {/* Donut above label hover so the ring stays on top */}
           <div className="absolute z-20" style={{ top: 94, left: 56 }}>
             <Donut />
           </div>
 
-          {/* Labels around the donut */}
           <DonutLabel
             style={{ top: 60, left: 87 }}
             name="Economics"
@@ -346,7 +320,6 @@ export default function DeadDealPanel() {
         </div>
       </div>
 
-      {/* Block 2: Reason × Status matrix */}
       <div className="flex max-w-[602px] w-full flex-col overflow-hidden bg-[#DCDCDC]">
         <div className="grid h-[40px] w-full shrink-0 grid-cols-[130px_repeat(4,minmax(0,1fr))] items-center bg-ap-dark-gray pl-[14px] text-[14px] font-medium leading-none text-white">
           <span />
@@ -359,11 +332,7 @@ export default function DeadDealPanel() {
           {matrixRows.map((row) => (
             <div
               key={row.name}
-              className={`grid h-[30px] w-full grid-cols-[130px_repeat(4,minmax(0,1fr))] items-center pl-[14px] text-[14px] leading-none text-ap-text transition-colors duration-150 ${
-                row.name === 'REC Pack'
-                  ? 'hover:bg-ap-row-highlight'
-                  : 'hover:bg-ap-row-highlight'
-              } cursor-pointer`}
+              className="grid h-[30px] w-full grid-cols-[130px_repeat(4,minmax(0,1fr))] items-center pl-[14px] text-[14px] leading-none text-ap-text transition-colors duration-150 cursor-pointer hover:bg-ap-row-highlight"
             >
               <span className="font-semibold">{row.name}</span>
               {row.cells.map((c, i) => (
@@ -377,7 +346,6 @@ export default function DeadDealPanel() {
         </div>
       </div>
 
-      {/* Block 3: Stacked bars with Normalize + Percentage toggles */}
       <div className="flex max-w-[602px] w-full flex-col overflow-hidden bg-[#DCDCDC]">
         <div className="flex h-[40px] w-full shrink-0 items-center bg-[#B8B8B8] pl-[14px] pr-[30px] text-[14px] font-semibold leading-none text-[#4E4D4D]">
           <span className="w-[120px] shrink-0" aria-hidden />
@@ -393,11 +361,7 @@ export default function DeadDealPanel() {
           {barRows.map((row) => (
             <div
               key={row.name}
-              className={`flex min-h-[37px] w-full cursor-pointer items-center pl-[14px] pr-[30px] text-[14px] leading-none text-ap-text transition-colors duration-150 ${
-                row.name === 'REC Approved'
-                  ? 'hover:bg-ap-row-highlight'
-                  : 'hover:bg-ap-row-highlight'
-              }`}
+              className="flex min-h-[37px] w-full cursor-pointer items-center pl-[14px] pr-[30px] text-[14px] leading-none text-ap-text transition-colors duration-150 hover:bg-ap-row-highlight"
             >
               <span className="w-[120px] shrink-0 whitespace-nowrap font-semibold leading-none">
                 {row.name}
