@@ -43,10 +43,7 @@
   }
 }
 
-/*
- * Custom scrollbar — Figma #BBC3CF, 12px pill
- * Small left inset only (no stacked padding gaps)
- */
+/* 12px pill scrollbar used across the app. */
 .ap-scrollbar {
   scrollbar-width: auto;
   scrollbar-color: #bbc3cf transparent;
@@ -87,10 +84,7 @@
   margin-bottom: 4px;
 }
 
-/*
- * Slim inner-column scrollbar (e.g. the Year list in Time Period) —
- * same palette as .ap-scrollbar but narrower, for small fixed-height lists.
- */
+/* Slim variant for narrow lists (e.g. Year column in Time Period). */
 .ap-scrollbar-thin {
   scrollbar-width: thin;
   scrollbar-color: #bbc3cf transparent;

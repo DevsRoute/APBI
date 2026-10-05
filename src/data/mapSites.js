@@ -1,6 +1,4 @@
-// Demo dataset of candidate "sites" near Salt Lake City so the map ships with
-// something recognisable. Two of these are marked as route endpoints (origin +
-// destination) — the rest are pins the user can select from the sites table.
+// Sample sites around Salt Lake City. Two are flagged as route endpoints.
 export const MAP_CENTER = { lat: 40.7608, lng: -111.891 }
 
 export const MAP_SITES = [
