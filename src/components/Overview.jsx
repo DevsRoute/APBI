@@ -58,7 +58,6 @@ export default function Overview() {
         onValueChange={setActiveTab}
         className="flex h-full min-h-0 flex-1 flex-col"
       >
-        {/* Shared 602px column so every tab keeps the same content→scrollbar gap */}
         <div className="ap-scrollbar ap-scrollbar-overview relative flex min-h-0 w-full max-w-[640px] flex-1 flex-col overflow-y-auto overflow-x-hidden">
           <TabsContent value="overview" className="">
             <OverviewPanel />

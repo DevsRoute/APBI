@@ -6,9 +6,7 @@ const TRACK_W = 213
 const BAR_GREEN = '#349A7A'
 const BAR_TEAL = '#36B9C1'
 
-// RightRow has 23px padding on each side around the 213px track. Per Figma,
-// RightCard is 280px wide in count mode but widens to 314px in percentage
-// mode, so a "%" label always has room to sit outside the bar.
+// The right card is wider in percentage mode so "%" labels sit outside the bar.
 const RIGHT_ROW_PAD_X = 23
 const RIGHT_CARD_W = { count: 280, percentage: 314 }
 const RIGHT_CARD_WIDTH_CLASS = { count: 'w-[280px]', percentage: 'w-[314px]' }
@@ -75,16 +73,10 @@ function Bar({ count, pct, bar, percentage }) {
   const color = percentage ? BAR_TEAL : BAR_GREEN
   const label = percentage ? `${pct.toFixed(1)}%` : String(count)
 
-  // RightCard's overflow-hidden clips at the card's own right edge — the
-  // row's pr-23 is just padding, not a clip boundary — so only the left
-  // padding actually eats into the room available for the label.
   const cardW = percentage ? RIGHT_CARD_W.percentage : RIGHT_CARD_W.count
   const outerSlack = cardW - RIGHT_ROW_PAD_X - TRACK_W
 
-  // Rough label width at 14px font-extrabold — only used as a safety net so
-  // an unusually long label can never clip the card; with Figma's card
-  // widths this doesn't kick in, and the bar renders at its true full
-  // width (no gray sliver past a "100%" fill).
+  // Safety cap so an unusually long label can't clip the card edge.
   const estLabelW = label.length * 8.5 + 6
   const barW = Math.min(bar, TRACK_W, TRACK_W + outerSlack - estLabelW)
 
@@ -235,7 +227,6 @@ export default function SuccessPanel() {
         </span>
       </div>
 
-      {/* Main funnel block */}
       <div className="mt-[10px] flex gap-[11px]">
         <LeftCard rows={funnelRows} showHeader />
         <RightCard
@@ -246,7 +237,6 @@ export default function SuccessPanel() {
         />
       </div>
 
-      {/* Summary block */}
       <div className="mt-[12px] flex gap-[11px]">
         <LeftCard rows={summaryRows} showHeader={false} />
         <RightCard

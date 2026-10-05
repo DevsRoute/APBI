@@ -13,7 +13,6 @@ export default function App() {
           alt="AbstraPoint header"
           className="block w-full select-none"
         />
-        {/* Header bottom-edge shadow — Figma: 16px, opacity 30%, linear gradient #000000 → #788291 (0% alpha), fading downward */}
         <div
           aria-hidden
           className="pointer-events-none absolute left-0 right-0 h-[16px] opacity-30"

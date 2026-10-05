@@ -6,8 +6,6 @@ import { useRightPanel } from '@/context/RightPanelContext'
 import { defaultChecked, location, people, timePeriod } from '@/data/filters'
 
 function CollapseArrow({ direction = 'left' }) {
-  // Figma vector: 12x7.21 native, rotated 90° in the design.
-  // Rendered visual size is 7.21w x 12h.
   const path =
     direction === 'left'
       ? 'M7.21 0L0 6L7.21 12Z'
@@ -48,10 +46,7 @@ function SelectAllNone({ onSelectAll, onNone }) {
   )
 }
 
-// 'time' shows 5 rows before scrolling (Time Period columns); 'panel' shows
-// 10 (Territory/People columns). The scrollbar gutter is only reserved once
-// a column's items actually exceed that cap, so short lists (e.g. Broker)
-// keep their full width instead of losing space to an unused scrollbar.
+// 'time' columns show 5 rows before scrolling, 'panel' columns show 10.
 const ROWS_VISIBLE = { time: 5, panel: 10 }
 const COLUMN_MAX_HEIGHT = {
   time: 'max-h-[120px]',
@@ -128,8 +123,6 @@ function FilterCard({ title, height, showCollapse, onCollapse, children }) {
   )
 }
 
-// Card whose header is a two-way tab switcher (e.g. Territory / People)
-// instead of a single static title.
 function SidebarTabCard({ tabs, defaultValue = 'territory' }) {
   return (
     <TabsPrimitive.Root
@@ -191,7 +184,6 @@ export default function FiltersSidebar() {
 
   return (
     <div className="relative">
-      {/* Sidebar right-edge shadow — mirrors the header pattern (16px, opacity 30%, black → transparent) */}
       <div
         aria-hidden
         className="pointer-events-none absolute bottom-0 top-0 z-30 w-[10px] opacity-30"
@@ -205,9 +197,7 @@ export default function FiltersSidebar() {
           isOpen ? 'w-[373px]' : 'w-[28px]'
         }`}
       >
-        {/* Scrollable filter cards — the Apply button below stays put regardless of scroll */}
         <div className="ap-scrollbar min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
-          {/* w-full when open so the Figma scrollbar slot isn't clipped; fixed width while collapsing */}
           <div className={`relative ${isOpen ? 'w-full' : 'w-[373px]'}`}>
             <FilterCard
               title="Time Period"
@@ -300,7 +290,6 @@ export default function FiltersSidebar() {
         )}
       </aside>
 
-      {/* Collapsed mini-sidebar — visible only when the main sidebar is closed */}
       <div
         role="button"
         tabIndex={0}

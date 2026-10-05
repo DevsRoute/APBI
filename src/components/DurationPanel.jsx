@@ -3,13 +3,9 @@ import { useState } from 'react'
 import { hasImageForStatus, useRightPanel } from '@/context/RightPanelContext'
 import { sitesSelected } from '@/data/stats'
 
-// Track width in px (Figma: 213). Bar percent widths are proportional to this.
 const TRACK_W = 213
 
-// RightRow is w-[280px] with 23px left padding before the 213px track.
-// RightCard's overflow-hidden clips at the card's own right edge — the
-// row's pr-23 is just padding, not a clip boundary — so only the left
-// padding counts against the room available for a label past the bar.
+// Pixels of room past the end of the track before the card clips.
 const OUTER_SLACK = 280 - 23 - TRACK_W
 
 const durationRows = [
@@ -29,16 +25,11 @@ const barColor = {
   pink: '#FFB0B0',
 }
 
-// Scale so the largest selected value (89) fills roughly 75% of the track.
 const SCALE = TRACK_W / 120
 
-// Normalized mode: each row uses its own scale so that the row's Overall
-// (average) always lands at the same fixed position — the track's center.
-// Bars still grow from the left; comparing where each bar ends against the
-// centered tick shows how selected compares to that row's average.
+// In normalize mode each row scales its own bar so Overall lands at TRACK_W/2.
 const NORM_OVERALL_X = TRACK_W / 2
 
-// Custom checkbox for Normalize — AP medium gray (#B8B8B8) unchecked fill.
 function NormalizeCheckbox({ checked }) {
   return (
     <svg
@@ -63,8 +54,6 @@ function BarRow({ selected, overall, tone, normalize }) {
   const color = barColor[tone]
   const label = String(selected)
 
-  // Per-row scale in normalize mode pins `overall` to the fixed center X;
-  // shared scale otherwise. Bars grow from the left in both modes.
   const scale = normalize
     ? overall > 0
       ? NORM_OVERALL_X / overall
@@ -72,15 +61,12 @@ function BarRow({ selected, overall, tone, normalize }) {
     : SCALE
   const overallX = normalize ? NORM_OVERALL_X : Math.min(overall * SCALE, TRACK_W)
 
-  // Rough label width at 14px font-extrabold — cap the bar a touch short of
-  // the track's end so the label always fits outside it, in the bar's own
-  // color, without running into RightCard's overflow-hidden edge.
+  // Reserve room for the trailing label so it never clips the card edge.
   const estLabelW = label.length * 8.5 + 6
   const barW = Math.min(selected * scale, TRACK_W, TRACK_W + OUTER_SLACK - estLabelW)
 
   return (
     <div className="relative w-[213px]">
-      {/* Overall tick marker */}
       <div
         className="absolute -top-[10px] flex -translate-x-1/2 flex-col items-center leading-none"
         style={{ left: overallX }}
@@ -89,7 +75,6 @@ function BarRow({ selected, overall, tone, normalize }) {
         <span className="mt-[1px] h-[3px] w-px bg-ap-text" />
       </div>
 
-      {/* Track */}
       <div className="relative mt-[6px] h-[16px] w-full rounded-[10px] bg-ap-medium-gray">
         <div
           className="absolute left-0 top-1/2 h-[16px] -translate-y-1/2 rounded-[10px]"
@@ -167,7 +152,6 @@ export default function DurationPanel() {
       </div>
 
       <div className="mt-[8px] flex gap-[11px]">
-        {/* Left card: 311 wide */}
         <div className="flex w-[311px] flex-col overflow-hidden">
           <div className="grid h-[58px] w-full shrink-0 grid-cols-[110px_105px_1fr] items-start bg-ap-dark-gray pl-[14px] pr-[12px] pt-[12px] text-[14px] leading-tight text-white">
             <span />
@@ -199,7 +183,6 @@ export default function DurationPanel() {
           </div>
         </div>
 
-        {/* Right card: 259 wide, 11px gap from left */}
         <RightCard />
       </div>
     </>

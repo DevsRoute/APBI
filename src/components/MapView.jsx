@@ -8,82 +8,40 @@ import {
   requestPort,
 } from '@/lib/gpsSerial'
 import { loadGoogleMaps } from '@/lib/loadGoogleMaps'
+import {
+  MIDPOINT_HIT_PX,
+  ROUTE_COLORS,
+  SEGMENT_HIT_PX,
+  colorForSite,
+  formatAccuracy,
+  formatDistance,
+  formatDuration,
+  metersPerPixel,
+  nodeSvg,
+  pinSvg,
+  pointToSegmentMeters,
+} from '@/lib/mapHelpers'
 import { MAP_CENTER, MAP_SITES } from '@/data/mapSites'
 
 const API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY
 
-const ORIGIN_COLOR = '#E53935'
-const DESTINATION_COLOR = '#E53935'
-const SITE_COLOR = '#7C7C8A'
-const SELECTED_COLOR = '#2563EB'
-const ROUTE_COLOR = '#2563EB'
-const NODE_COLOR = '#2563EB'
-
-const SEGMENT_HIT_PX = 25
-const MIDPOINT_HIT_PX = 20
-
-function pinSvg(color) {
-  const svg = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="44" viewBox="0 0 32 44">
-      <path d="M16 0C7.163 0 0 7.163 0 16c0 11 16 28 16 28s16-17 16-28C32 7.163 24.837 0 16 0z" fill="${color}"/>
-      <circle cx="16" cy="16" r="6" fill="#ffffff"/>
-    </svg>`
-  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`
-}
-
-function nodeSvg(color = NODE_COLOR) {
-  const svg = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22">
-      <circle cx="11" cy="11" r="9" fill="#ffffff" stroke="${color}" stroke-width="2.5"/>
-    </svg>`
-  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`
-}
-
-function metersPerPixel(lat, zoom) {
-  return (156543.03392 * Math.cos((lat * Math.PI) / 180)) / Math.pow(2, zoom)
-}
-
-// Distance in meters from point p to segment a→b. Treats lat/lng as flat
-// near the segment — accurate enough at city scale, and far more reliable
-// than vertex-only distance (which misses clicks on long straight stretches).
-function pointToSegmentMeters(p, a, b, google) {
-  const spherical = google.maps.geometry.spherical
-  const dx = b.lat() - a.lat()
-  const dy = b.lng() - a.lng()
-  const len2 = dx * dx + dy * dy
-  if (len2 === 0) return spherical.computeDistanceBetween(p, a)
-  const t = Math.max(
-    0,
-    Math.min(
-      1,
-      ((p.lat() - a.lat()) * dx + (p.lng() - a.lng()) * dy) / len2,
-    ),
-  )
-  const closest = new google.maps.LatLng(a.lat() + t * dx, a.lng() + t * dy)
-  return spherical.computeDistanceBetween(p, closest)
-}
-
 export default function MapView() {
-  // --- refs ---
   const mapContainerRef = useRef(null)
   const mapRef = useRef(null)
   const directionsServiceRef = useRef(null)
   const projectorRef = useRef(null)
   const contextMenuHandlerRef = useRef(null)
 
-  // Route data
   const segmentsRef = useRef([])
   const intermediariesRef = useRef([])
   const intermediaryMarkersRef = useRef(new Map())
   const siteMarkersRef = useRef(new Map())
   const rebuildVersionRef = useRef(0)
 
-  // Mirrored state for one-time listeners
   const originIdRef = useRef(null)
   const destinationIdRef = useRef(null)
   const siteByIdRef = useRef({})
 
-  // Location (browser geolocation + GPS)
   const userMarkerRef = useRef(null)
   const userAccuracyCircleRef = useRef(null)
   const watchIdRef = useRef(null)
@@ -93,7 +51,6 @@ export default function MapView() {
   const wasBrowserTrackingRef = useRef(false)
   const hasCenteredOnUserRef = useRef(false)
 
-  // --- state ---
   const [status, setStatus] = useState('loading')
   const [errorMessage, setErrorMessage] = useState('')
   const [selectedId, setSelectedId] = useState(null)
@@ -127,7 +84,6 @@ export default function MapView() {
     siteByIdRef.current = siteById
   }, [siteById])
 
-  // --- map init (runs once) ---
   useEffect(() => {
     let cancelled = false
 
@@ -146,9 +102,9 @@ export default function MapView() {
         mapRef.current = map
         directionsServiceRef.current = new google.maps.DirectionsService()
 
-        // OverlayView exposes pixel→lat/lng projection for our DOM-level
-        // right-click handler. (Google's own `rightclick` doesn't fire on
-        // the draggable route polyline.)
+        // OverlayView gives us a projection we can use from the DOM-level
+        // contextmenu handler (Google's rightclick doesn't fire on the
+        // draggable route polyline).
         const projector = new google.maps.OverlayView()
         projector.onAdd = () => {}
         projector.draw = () => {}
@@ -210,30 +166,22 @@ export default function MapView() {
           siteMarkersRef.current.set(site.id, marker)
         })
 
-        // --- Locate Me button ---
-        const locateBtn = document.createElement('button')
-        locateBtn.type = 'button'
-        locateBtn.title = 'Show my location'
-        locateBtn.setAttribute('aria-label', 'Show my location')
-        locateBtn.style.cssText =
-          'margin:0 10px 20px 0;width:40px;height:40px;border-radius:50%;border:none;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,0.3);cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;'
-        locateBtn.innerHTML =
-          '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#5f6368" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>'
-        locateBtn.addEventListener('click', locateMe)
+        const locateBtn = makeControlButton({
+          title: 'Show my location',
+          marginBottom: 20,
+          svg: locateIconSvg('#5f6368', false),
+          onClick: locateMe,
+        })
         locateBtnRef.current = locateBtn
         map.controls[google.maps.ControlPosition.RIGHT_BOTTOM].push(locateBtn)
 
-        // --- GPS button (Chrome/Edge only) ---
         if (isWebSerialSupported()) {
-          const gpsBtn = document.createElement('button')
-          gpsBtn.type = 'button'
-          gpsBtn.title = 'Connect USB GPS receiver'
-          gpsBtn.setAttribute('aria-label', 'Connect USB GPS receiver')
-          gpsBtn.style.cssText =
-            'margin:0 10px 8px 0;width:40px;height:40px;border-radius:50%;border:none;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,0.3);cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;'
-          gpsBtn.innerHTML =
-            '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#5f6368" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 0 1 10 10"/><path d="M12 6a6 6 0 0 1 6 6"/><circle cx="12" cy="12" r="2" fill="#5f6368"/></svg>'
-          gpsBtn.addEventListener('click', toggleGps)
+          const gpsBtn = makeControlButton({
+            title: 'Connect USB GPS receiver',
+            marginBottom: 8,
+            svg: gpsIconSvg('#5f6368'),
+            onClick: toggleGps,
+          })
           gpsBtnRef.current = gpsBtn
           map.controls[google.maps.ControlPosition.RIGHT_BOTTOM].push(gpsBtn)
 
@@ -257,10 +205,7 @@ export default function MapView() {
       clearSegments()
       clearIntermediaryMarkers()
       if (contextMenuHandlerRef.current) {
-        document.removeEventListener(
-          'contextmenu',
-          contextMenuHandlerRef.current,
-        )
+        document.removeEventListener('contextmenu', contextMenuHandlerRef.current)
         contextMenuHandlerRef.current = null
       }
       projectorRef.current?.setMap(null)
@@ -281,7 +226,6 @@ export default function MapView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // --- button visual state ---
   useEffect(() => {
     const btn = locateBtnRef.current
     if (!btn) return
@@ -289,7 +233,7 @@ export default function MapView() {
     const label = isTracking ? 'Stop live tracking' : 'Show my location'
     btn.title = label
     btn.setAttribute('aria-label', label)
-    btn.innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="${stroke}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"${isTracking ? ` fill="${stroke}"` : ''}/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>`
+    btn.innerHTML = locateIconSvg(stroke, isTracking)
   }, [isTracking])
 
   useEffect(() => {
@@ -305,10 +249,9 @@ export default function MapView() {
     btn.setAttribute('aria-label', label)
     btn.disabled = isGpsConnecting
     btn.style.opacity = isGpsConnecting ? '0.6' : '1'
-    btn.innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="${stroke}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 0 1 10 10"/><path d="M12 6a6 6 0 0 1 6 6"/><circle cx="12" cy="12" r="2" fill="${stroke}"/></svg>`
+    btn.innerHTML = gpsIconSvg(stroke)
   }, [isGpsConnected, isGpsConnecting, hasAuthorizedGpsPort])
 
-  // --- dismiss context menu on outside click / Escape ---
   useEffect(() => {
     if (!contextMenu) return
     const close = () => setContextMenu(null)
@@ -323,7 +266,6 @@ export default function MapView() {
     }
   }, [contextMenu])
 
-  // --- recolour site pins on selection / endpoint change ---
   useEffect(() => {
     if (status !== 'ready') return
     const google = window.google
@@ -338,7 +280,6 @@ export default function MapView() {
     })
   }, [status, selectedId, originId, destinationId])
 
-  // --- rebuild route when endpoints change ---
   useEffect(() => {
     if (status !== 'ready') return
     const origin = siteById[originId]
@@ -348,10 +289,6 @@ export default function MapView() {
     rebuildAllSegments()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, originId, destinationId, siteById])
-
-  // ============================================================
-  //                      ROUTE / SEGMENTS
-  // ============================================================
 
   function pointsList() {
     const originPos = siteByIdRef.current[originIdRef.current]?.position
@@ -390,7 +327,7 @@ export default function MapView() {
         crossOnDrag: false,
         optimized: false,
         icon: {
-          url: nodeSvg(NODE_COLOR),
+          url: nodeSvg(ROUTE_COLORS.node),
           scaledSize: new google.maps.Size(22, 22),
           anchor: new google.maps.Point(11, 11),
         },
@@ -404,8 +341,6 @@ export default function MapView() {
     })
   }
 
-  // Tears down the segment's renderer and reloads it with the given shape.
-  // Used for both initial loads and reshapes after a drag.
   function loadSegmentRoute(segIdx, shapingWaypoints, modified) {
     const google = window.google
     const map = mapRef.current
@@ -423,7 +358,7 @@ export default function MapView() {
       suppressMarkers: true,
       preserveViewport: true,
       polylineOptions: {
-        strokeColor: ROUTE_COLOR,
+        strokeColor: ROUTE_COLORS.route,
         strokeOpacity: 0.95,
         strokeWeight: 6,
       },
@@ -488,8 +423,7 @@ export default function MapView() {
     if (a.length !== b.length) return false
     return a.every(
       (p, i) =>
-        Math.abs(p.lat - b[i].lat) < 1e-7 &&
-        Math.abs(p.lng - b[i].lng) < 1e-7,
+        Math.abs(p.lat - b[i].lat) < 1e-7 && Math.abs(p.lng - b[i].lng) < 1e-7,
     )
   }
 
@@ -550,24 +484,6 @@ export default function MapView() {
       midpoints: intermediariesRef.current.length,
     })
   }
-
-  function formatDistance(m) {
-    const mi = m / 1609.344
-    return mi >= 10 ? `${mi.toFixed(0)} mi` : `${mi.toFixed(1)} mi`
-  }
-
-  function formatDuration(s) {
-    if (s < 60) return `${Math.round(s)} s`
-    const mins = Math.round(s / 60)
-    if (mins < 60) return `${mins} min`
-    const h = Math.floor(mins / 60)
-    const rest = mins % 60
-    return rest === 0 ? `${h}h` : `${h}h ${rest}m`
-  }
-
-  // ============================================================
-  //                         MIDPOINTS
-  // ============================================================
 
   function findNearestMidpoint(latLng, thresholdPx) {
     const google = window.google
@@ -646,10 +562,6 @@ export default function MapView() {
     rebuildAllSegments()
   }
 
-  // ============================================================
-  //                 LOCATION (browser + USB GPS)
-  // ============================================================
-
   function stopTracking() {
     if (watchIdRef.current != null) {
       navigator.geolocation.clearWatch(watchIdRef.current)
@@ -658,12 +570,6 @@ export default function MapView() {
     setIsTracking(false)
     setIsLocating(false)
     hasCenteredOnUserRef.current = false
-  }
-
-  function formatAccuracy(meters) {
-    const feet = Math.round(meters * 3.28084)
-    if (feet > 5280) return `±${(feet / 5280).toFixed(1)} mi`
-    return `±${feet.toLocaleString()} ft`
   }
 
   function renderPosition({ latitude, longitude, accuracy, sourceLabel }) {
@@ -709,7 +615,7 @@ export default function MapView() {
     }
 
     // Only auto-center on the first fix so the map doesn't yank away while
-    // the user pans around during a live-tracking session.
+    // the user pans around during live tracking.
     if (!hasCenteredOnUserRef.current) {
       map.panTo(pos)
       if ((map.getZoom() ?? 0) < 14) map.setZoom(15)
@@ -842,10 +748,6 @@ export default function MapView() {
     }
   }
 
-  // ============================================================
-  //                           RENDER
-  // ============================================================
-
   return (
     <div className="flex h-screen w-full flex-col overflow-hidden bg-slate-50">
       <header className="flex shrink-0 items-center justify-between border-b border-slate-200 bg-white px-6 py-4">
@@ -863,8 +765,8 @@ export default function MapView() {
             </h1>
           </div>
           <p className="mt-1 text-xs text-slate-500">
-            Right-click the route for options · drag a section to detour ·
-            drag a midpoint to move it.
+            Right-click the route for options · drag a section to detour · drag
+            a midpoint to move it.
           </p>
         </div>
         <button
@@ -1064,13 +966,23 @@ export default function MapView() {
   )
 }
 
-function colorForSite(site, ctx) {
-  const { selectedId, originId, destinationId } = ctx || {}
-  if (selectedId && site.id === selectedId) return SELECTED_COLOR
-  if (originId ? site.id === originId : site.role === 'origin') return ORIGIN_COLOR
-  if (destinationId ? site.id === destinationId : site.role === 'destination')
-    return DESTINATION_COLOR
-  return SITE_COLOR
+function makeControlButton({ title, marginBottom, svg, onClick }) {
+  const btn = document.createElement('button')
+  btn.type = 'button'
+  btn.title = title
+  btn.setAttribute('aria-label', title)
+  btn.style.cssText = `margin:0 10px ${marginBottom}px 0;width:40px;height:40px;border-radius:50%;border:none;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,0.3);cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;`
+  btn.innerHTML = svg
+  btn.addEventListener('click', onClick)
+  return btn
+}
+
+function locateIconSvg(stroke, filled) {
+  return `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="${stroke}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"${filled ? ` fill="${stroke}"` : ''}/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>`
+}
+
+function gpsIconSvg(stroke) {
+  return `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="${stroke}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 0 1 10 10"/><path d="M12 6a6 6 0 0 1 6 6"/><circle cx="12" cy="12" r="2" fill="${stroke}"/></svg>`
 }
 
 function SectionHeader({ title, subtitle, compact }) {

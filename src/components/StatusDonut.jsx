@@ -35,7 +35,6 @@ function SliceLabel({ left, top, name, count, pct, center, align = 'left' }) {
 export default function StatusDonut() {
   return (
     <div className="relative h-[343px] w-[302px] bg-ap-header-gray">
-      {/* Dead / Active labels */}
       <p className="absolute left-[28px] top-[18px] m-0 text-[12px] font-medium leading-none text-ap-text">
         Dead
       </p>
