@@ -19,7 +19,6 @@ import {
   metersPerPixel,
   nodeSvg,
   pinSvg,
-  pointToSegmentMeters,
 } from '@/lib/mapHelpers'
 import { MAP_CENTER, MAP_SITES } from '@/data/mapSites'
 
@@ -136,13 +135,16 @@ export default function MapView() {
             })
             return
           }
-          const segIdx = findSegmentNearPoint(latLng, SEGMENT_HIT_PX)
+          const { idx: segIdx, snapped } = findSegmentNearPoint(
+            latLng,
+            SEGMENT_HIT_PX,
+          )
           if (segIdx >= 0) {
             setContextMenu({
               x: e.clientX,
               y: e.clientY,
               type: 'create',
-              latLng,
+              latLng: snapped,
               segmentIdx: segIdx,
               segmentModified: !!segmentsRef.current[segIdx]?.modified,
             })
@@ -506,22 +508,49 @@ export default function MapView() {
 
   function findSegmentNearPoint(latLng, thresholdPx) {
     const google = window.google
-    if (!google || segmentsRef.current.length === 0) return -1
+    const none = { idx: -1, snapped: null }
+    if (!google || segmentsRef.current.length === 0) return none
+    const spherical = google.maps.geometry.spherical
     const zoom = mapRef.current?.getZoom() ?? 13
     const thresholdMeters = thresholdPx * metersPerPixel(latLng.lat(), zoom)
     let bestIdx = -1
     let bestDist = Infinity
+    let bestSnapped = null
     segmentsRef.current.forEach((seg, i) => {
       const path = seg.overviewPath ?? []
       for (let j = 0; j < path.length - 1; j++) {
-        const d = pointToSegmentMeters(latLng, path[j], path[j + 1], google)
+        const a = path[j]
+        const b = path[j + 1]
+        const dx = b.lat() - a.lat()
+        const dy = b.lng() - a.lng()
+        const len2 = dx * dx + dy * dy
+        const t =
+          len2 === 0
+            ? 0
+            : Math.max(
+                0,
+                Math.min(
+                  1,
+                  ((latLng.lat() - a.lat()) * dx +
+                    (latLng.lng() - a.lng()) * dy) /
+                    len2,
+                ),
+              )
+        const closest = new google.maps.LatLng(
+          a.lat() + t * dx,
+          a.lng() + t * dy,
+        )
+        const d = spherical.computeDistanceBetween(latLng, closest)
         if (d < bestDist) {
           bestDist = d
           bestIdx = i
+          bestSnapped = closest
         }
       }
     })
-    return bestDist <= thresholdMeters ? bestIdx : -1
+    return bestDist <= thresholdMeters
+      ? { idx: bestIdx, snapped: bestSnapped }
+      : none
   }
 
   function addMidpoint(latLng, segIdx) {
