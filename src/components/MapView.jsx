@@ -19,6 +19,7 @@ import {
   metersPerPixel,
   nodeSvg,
   pinSvg,
+  pointToSegmentMeters,
 } from '@/lib/mapHelpers'
 import { MAP_CENTER, MAP_SITES } from '@/data/mapSites'
 
